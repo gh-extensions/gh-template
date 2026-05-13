@@ -275,40 +275,89 @@ _gh_template_apply() {
 	gum log --level info "Committed: $msg"
 }
 
+# Clone a template source into <dir>.
+#
+# Source may be either:
+#   - "owner/repo"     — cloned via `gh repo clone`
+#   - a local path     — cloned via `git clone` if it's a git repo,
+#                        otherwise copied with `cp -R`
+#
+# Detects local paths by a leading `./`, `../`, `/`, or `~`.
+#
+# Usage: _gh_template_clone_source <source> <dir>
+_gh_template_clone_source() {
+	local source="$1"
+	local dir="$2"
+
+	case "$source" in
+	./* | ../* | /* | ~*)
+		local expanded="${source/#\~/$HOME}"
+		if [[ ! -d "$expanded" ]]; then
+			gum log --level error "source directory not found: $source"
+			return 1
+		fi
+		if git -C "$expanded" rev-parse --git-dir >/dev/null 2>&1; then
+			git clone --quiet "$expanded" "$dir"
+		else
+			cp -R "$expanded" "$dir"
+		fi
+		;;
+	*/*)
+		gh repo clone "$source" "$dir" -- --quiet
+		;;
+	*)
+		gum log --level error "invalid --source '$source' (expected owner/repo or a local path)"
+		return 1
+		;;
+	esac
+}
+
 # Print usage for the apply subcommand.
 _show_apply_help() {
 	cat <<'EOF'
-gh template apply — apply template.yml substitutions to the current directory
+gh template apply — apply template.yml substitutions to a directory
 
 USAGE:
-    gh template apply [--config <path>] [--var name=value]... [--dry-run] [--force]
+    gh template apply [DIR] [--config <path>] [--var name=value]... [--dry-run] [--force]
+    gh template apply --source <owner/repo | path> [DIR] [--var name=value]... [--dry-run]
 
 DESCRIPTION:
     Reads .github/template.yml (or --config <path>), prompts for each
     variable via gum (or accepts --var name=value pairs non-interactively),
-    performs case-aware substitution across file contents and paths, deletes
-    the config file, and creates a single commit.
+    performs case-aware substitution across file contents and paths,
+    deletes the config file, and creates a single commit.
+
+    When --source is given, the source repo (a GitHub repo "owner/repo"
+    or a local directory) is cloned into DIR first (default: the source's
+    basename) and the substitution is applied there.
 
 FLAGS:
+    --source <repo|path> Clone the given GitHub repo or local path into DIR
+                         before applying. Refuses to overwrite a non-empty
+                         DIR unless --force is also passed.
     --config <path>      Use a different config file (default: .github/template.yml)
     --var name=value     Provide variable values non-interactively (repeatable)
     --dry-run            Print planned changes without modifying anything
-    --force              Run even if the working tree is dirty
+    --force              Run on a dirty tree, or clone into a non-empty DIR
 
 EXAMPLES:
     gh template apply
-    gh template apply --dry-run
-    gh template apply --var template-org=acme --var template-api='billing api' --var template=billing
+    gh template apply ./my-svc
+    gh template apply --source acme/sample-template
+    gh template apply --source acme/sample-template ./my-svc --var template-org=acme
+    gh template apply --source ./local/template --dry-run
 EOF
 }
 
 # Apply subcommand entrypoint.
 #
-# Parses argv, sets _gh_template_var_overrides from --var flags, then
-# invokes _gh_template_apply against the current working directory.
+# Parses argv, optionally clones a source repo, then invokes
+# _gh_template_apply against the target directory.
 #
 # Usage: _gh_template_apply_cmd [args...]
 _gh_template_apply_cmd() {
+	local source=""
+	local target_dir=""
 	local config_path=""
 	local dry_run=""
 	local force=""
@@ -319,6 +368,14 @@ _gh_template_apply_cmd() {
 		--help | -h | help)
 			_show_apply_help
 			return 0
+			;;
+		--source)
+			shift
+			[[ $# -eq 0 ]] && {
+				gum log --level error "--source requires a value"
+				return 1
+			}
+			source="$1"
 			;;
 		--config)
 			shift
@@ -348,104 +405,8 @@ _gh_template_apply_cmd() {
 			return 1
 			;;
 		*)
-			gum log --level error "unexpected argument '$1'"
-			return 1
-			;;
-		esac
-		shift
-	done
-
-	local repo_dir
-	repo_dir=$(pwd)
-
-	if [[ -z "$config_path" ]]; then
-		config_path="$repo_dir/.github/template.yml"
-	fi
-
-	if [[ -z "$force" ]] && git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
-		if [[ -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null)" ]]; then
-			gum log --level error "working tree is dirty — commit or use --force"
-			return 1
-		fi
-	fi
-
-	_gh_template_apply "$repo_dir" "$config_path" "$dry_run"
-}
-
-# Print usage for the create subcommand.
-_show_create_help() {
-	cat <<'EOF'
-gh template create — create a new GitHub repository from a template
-
-USAGE:
-    gh template create <new-repo> --template <owner/repo> [--public|--private|--internal] [--var name=value]...
-
-DESCRIPTION:
-    Creates a new GitHub repository from the given template via
-    `gh repo create --template`, clones it locally, applies the
-    substitutions declared in .github/template.yml, removes the config,
-    commits and pushes.
-
-FLAGS:
-    --template <owner/repo>   Template repository (required)
-    --public                  Create a public repository
-    --private                 Create a private repository (default)
-    --internal                Create an internal repository
-    --var name=value          Provide variable values non-interactively (repeatable)
-
-EXAMPLES:
-    gh template create my-new-svc --template my-org/sample-template
-    gh template create acme/billing-api --template my-org/sample-template --var template=billing
-EOF
-}
-
-# Create subcommand entrypoint.
-#
-# Calls `gh repo create --template --clone`, then applies substitutions
-# in the cloned directory and pushes the resulting commit.
-#
-# Usage: _gh_template_create_cmd [args...]
-_gh_template_create_cmd() {
-	local new_repo=""
-	local template_ref=""
-	local visibility=""
-	declare -gA _gh_template_var_overrides=()
-
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--help | -h | help)
-			_show_create_help
-			return 0
-			;;
-		--template)
-			shift
-			[[ $# -eq 0 ]] && {
-				gum log --level error "--template requires a value"
-				return 1
-			}
-			template_ref="$1"
-			;;
-		--public | --private | --internal) visibility="$1" ;;
-		--var)
-			shift
-			[[ $# -eq 0 ]] && {
-				gum log --level error "--var requires name=value"
-				return 1
-			}
-			local pair="$1"
-			if [[ "$pair" != *=* ]]; then
-				gum log --level error "--var expects name=value (got '$pair')"
-				return 1
-			fi
-			_gh_template_var_overrides["${pair%%=*}"]="${pair#*=}"
-			;;
-		-*)
-			gum log --level error "unknown flag '$1'"
-			return 1
-			;;
-		*)
-			if [[ -z "$new_repo" ]]; then
-				new_repo="$1"
+			if [[ -z "$target_dir" ]]; then
+				target_dir="$1"
 			else
 				gum log --level error "unexpected argument '$1'"
 				return 1
@@ -455,37 +416,37 @@ _gh_template_create_cmd() {
 		shift
 	done
 
-	if [[ -z "$new_repo" ]]; then
-		gum log --level error "missing <new-repo> argument"
-		gum log --level info "Usage: gh template create <new-repo> --template <owner/repo>"
-		return 1
+	if [[ -n "$source" ]]; then
+		if [[ -z "$target_dir" ]]; then
+			target_dir=$(basename "$source")
+		fi
+		if [[ -e "$target_dir" && -n "$(ls -A "$target_dir" 2>/dev/null)" && -z "$force" ]]; then
+			gum log --level error "target '$target_dir' exists and is not empty — use --force to overwrite"
+			return 1
+		fi
+		gum log --level info "Cloning '$source' into '$target_dir'..."
+		if ! _gh_template_clone_source "$source" "$target_dir"; then
+			return 1
+		fi
+		_gh_template_commit_msg="chore: apply template from $source"
+	else
+		target_dir="${target_dir:-$(pwd)}"
+		if [[ ! -d "$target_dir" ]]; then
+			gum log --level error "directory not found: $target_dir"
+			return 1
+		fi
+		if [[ -z "$force" ]] && git -C "$target_dir" rev-parse --git-dir >/dev/null 2>&1; then
+			if [[ -n "$(git -C "$target_dir" status --porcelain 2>/dev/null)" ]]; then
+				gum log --level error "working tree is dirty — commit or use --force"
+				return 1
+			fi
+		fi
 	fi
-	if [[ -z "$template_ref" ]]; then
-		gum log --level error "missing --template <owner/repo>"
-		return 1
+
+	if [[ -z "$config_path" ]]; then
+		config_path="$target_dir/.github/template.yml"
 	fi
 
-	visibility="${visibility:---private}"
-
-	gum log --level info "Creating '$new_repo' from template '$template_ref'..."
-	if ! gh repo create "$new_repo" --template "$template_ref" --clone "$visibility"; then
-		gum log --level error "failed to create repository"
-		return 1
-	fi
-
-	local clone_dir
-	clone_dir=$(basename "$new_repo")
-
-	if [[ ! -d "$clone_dir" ]]; then
-		gum log --level error "expected clone at '$clone_dir' but directory is missing"
-		return 1
-	fi
-
-	_gh_template_commit_msg="chore: apply template from $template_ref" \
-		_gh_template_apply "$clone_dir" "$clone_dir/.github/template.yml"
-
-	if ! git -C "$clone_dir" push 2>/dev/null; then
-		gum log --level warn "push failed — run 'git push' from '$clone_dir' manually"
-	fi
+	_gh_template_apply "$target_dir" "$config_path" "$dry_run"
 }
 

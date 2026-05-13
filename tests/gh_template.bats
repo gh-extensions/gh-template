@@ -39,8 +39,8 @@ setup() {
 			_gh_template_case_variants _gh_template_prompt_variables \
 			_gh_template_build_replacements _gh_template_substitute_content \
 			_gh_template_substitute_paths _gh_template_apply \
-			_gh_template_apply_cmd _gh_template_create_cmd \
-			_show_apply_help _show_create_help _is_binary_file
+			_gh_template_apply_cmd _gh_template_clone_source \
+			_show_apply_help _is_binary_file
 	)"
 }
 
@@ -276,36 +276,13 @@ EOF
 	[[ "$output" == *"gh template apply"* ]]
 	[[ "$output" == *"--dry-run"* ]]
 	[[ "$output" == *"--var"* ]]
-}
-
-@test "_show_create_help: mentions create usage" {
-	run _show_create_help
-	[[ "$output" == *"gh template create"* ]]
-	[[ "$output" == *"--template"* ]]
+	[[ "$output" == *"--source"* ]]
 }
 
 @test "_gh_template_apply_cmd: --help prints usage" {
 	run _gh_template_apply_cmd --help
 	[[ "$status" -eq 0 ]]
 	[[ "$output" == *"gh template apply"* ]]
-}
-
-@test "_gh_template_create_cmd: --help prints usage" {
-	run _gh_template_create_cmd --help
-	[[ "$status" -eq 0 ]]
-	[[ "$output" == *"gh template create"* ]]
-}
-
-@test "_gh_template_create_cmd: errors without --template" {
-	run _gh_template_create_cmd my-repo
-	[[ "$status" -ne 0 ]]
-	[[ "$output" == *"--template"* ]]
-}
-
-@test "_gh_template_create_cmd: errors without new-repo arg" {
-	run _gh_template_create_cmd --template owner/tpl
-	[[ "$status" -ne 0 ]]
-	[[ "$output" == *"new-repo"* ]]
 }
 
 @test "_gh_template_apply_cmd: rejects unknown flag" {
@@ -320,4 +297,104 @@ EOF
 	run _gh_template_apply_cmd --var "noequalsign"
 	[[ "$status" -ne 0 ]]
 	[[ "$output" == *"name=value"* ]]
+}
+
+@test "_gh_template_apply_cmd: rejects unknown positional after DIR" {
+	cd "$BATS_TEST_TMPDIR"
+	run _gh_template_apply_cmd ./a ./b
+	[[ "$status" -ne 0 ]]
+	[[ "$output" == *"unexpected"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# _gh_template_clone_source
+# ---------------------------------------------------------------------------
+
+@test "_gh_template_clone_source: clones a local git repo" {
+	local src="$BATS_TEST_TMPDIR/src"
+	_init_repo "$src"
+	echo "hello" >"$src/file.txt"
+	git -C "$src" add -A
+	git -C "$src" commit -q -m "initial"
+
+	local dst="$BATS_TEST_TMPDIR/dst"
+	_gh_template_clone_source "$src" "$dst"
+
+	[[ -d "$dst/.git" ]]
+	[[ -f "$dst/file.txt" ]]
+}
+
+@test "_gh_template_clone_source: copies a non-git local directory" {
+	local src="$BATS_TEST_TMPDIR/plain"
+	mkdir -p "$src"
+	echo "hello" >"$src/file.txt"
+
+	local dst="$BATS_TEST_TMPDIR/dst"
+	_gh_template_clone_source "$src" "$dst"
+
+	[[ -f "$dst/file.txt" ]]
+	[[ ! -d "$dst/.git" ]]
+}
+
+@test "_gh_template_clone_source: errors on nonexistent local path" {
+	run _gh_template_clone_source "./does-not-exist" "$BATS_TEST_TMPDIR/dst"
+	[[ "$status" -ne 0 ]]
+	[[ "$output" == *"not found"* ]]
+}
+
+@test "_gh_template_clone_source: errors on malformed source" {
+	run _gh_template_clone_source "plain-string" "$BATS_TEST_TMPDIR/dst"
+	[[ "$status" -ne 0 ]]
+	[[ "$output" == *"invalid"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# _gh_template_apply_cmd with --source
+# ---------------------------------------------------------------------------
+
+@test "_gh_template_apply_cmd: --source local-repo end-to-end" {
+	local src="$BATS_TEST_TMPDIR/src"
+	_init_repo "$src"
+	_make_config "$src/.github/template.yml"
+	mkdir -p "$src/src/template-api"
+	echo "template-api TemplateApi" >"$src/src/template-api/code.txt"
+	git -C "$src" add -A
+	git -C "$src" commit -q -m "initial"
+
+	cd "$BATS_TEST_TMPDIR"
+	_gh_template_apply_cmd --source "$src" ./dst \
+		--var template-org=acme \
+		--var template-api='billing api' \
+		--var template=billing
+
+	[[ -d "./dst" ]]
+	[[ ! -f "./dst/.github/template.yml" ]]
+	[[ -d "./dst/src/billing-api" ]]
+	[[ -f "./dst/src/billing-api/code.txt" ]]
+	run cat "./dst/src/billing-api/code.txt"
+	[[ "$output" == "billing-api BillingApi" ]]
+
+	# Should have an extra commit on top of the source's history
+	local commits
+	commits=$(git -C "./dst" rev-list --count HEAD)
+	[[ "$commits" -eq 2 ]]
+	local msg
+	msg=$(git -C "./dst" log -1 --pretty=%s)
+	[[ "$msg" == *"apply template from"* ]]
+}
+
+@test "_gh_template_apply_cmd: --source refuses non-empty existing target without --force" {
+	local src="$BATS_TEST_TMPDIR/src"
+	_init_repo "$src"
+	_make_config "$src/.github/template.yml"
+	git -C "$src" add -A
+	git -C "$src" commit -q -m "initial"
+
+	cd "$BATS_TEST_TMPDIR"
+	mkdir -p ./dst
+	touch ./dst/existing
+
+	run _gh_template_apply_cmd --source "$src" ./dst
+	[[ "$status" -ne 0 ]]
+	[[ "$output" == *"not empty"* ]]
 }

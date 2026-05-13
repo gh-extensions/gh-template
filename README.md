@@ -45,45 +45,60 @@ gh extension install gh-extensions/gh-template                # installs from ma
 ## Usage
 
 ```bash
-gh template create <new-repo> --template <owner/repo> [--var name=value]...
-gh template apply [--config <path>] [--var name=value]... [--dry-run] [--force]
+gh template apply [DIR] [--config <path>] [--var name=value]... [--dry-run] [--force]
+gh template apply --source <owner/repo | path> [DIR] [--var name=value]... [--dry-run]
 ```
 
 ```bash
 gh template --help               # show help
 gh template --version            # print version
-gh template create --help        # create subcommand help
 gh template apply --help         # apply subcommand help
 ```
 
-### Create
+### Apply in place
 
-Creates a new GitHub repository from the given template, clones it locally,
-applies the substitutions declared in `.github/template.yml`, removes the
-config, and commits + pushes the result.
-
-```bash
-gh template create my-new-svc --template my-org/sample-template
-gh template create acme/billing-api --template my-org/sample-template --var template=billing
-```
-
-By default the new repo is created `--private`. Override with `--public` or
-`--internal`.
-
-### Apply
-
-Runs the substitution against the current working directory. Useful when you
-already have an empty repo cloned locally and want to bootstrap from a template
-manually, or to dry-run the changes before committing.
+Runs the substitution against `DIR` (default: the current working directory).
+Useful when you've already cloned the template repo yourself and want to
+bootstrap it in place, or to dry-run the changes before committing.
 
 ```bash
-gh template apply                   # interactive prompts
+gh template apply                   # interactive prompts on CWD
+gh template apply ./my-svc          # apply on ./my-svc
 gh template apply --dry-run         # show planned changes only
 gh template apply --var template-org=acme --var template-api='billing api' --var template=billing
 ```
 
 `apply` refuses to run on a dirty working tree unless `--force` is given, and
 is a no-op (exit 0) when `.github/template.yml` is already gone.
+
+### Apply from a source
+
+With `--source`, `gh template` first clones the source — either a GitHub repo
+(`owner/repo`) or a local path — into `DIR`, then applies the substitution
+there. If `DIR` is omitted it defaults to the basename of the source.
+
+```bash
+# Clone acme/sample-template and apply the substitutions
+gh template apply --source acme/sample-template
+
+# Pick the target directory explicitly
+gh template apply --source acme/sample-template ./my-svc
+
+# Apply from a local template (handy for offline iteration)
+gh template apply --source ./local/template ./my-svc
+
+# Non-interactive
+gh template apply --source acme/sample-template ./my-svc \
+  --var template-org=acme --var template-api='billing api' --var template=billing
+```
+
+`--source` refuses to overwrite a non-empty `DIR` unless `--force` is also
+passed. Publishing the result to GitHub is a separate step:
+
+```bash
+gh template apply --source acme/sample-template ./my-svc
+gh repo create acme/my-svc --source ./my-svc --push --private
+```
 
 ## Config schema
 
@@ -135,7 +150,8 @@ overlapping ones (`template`).
 
 ## How it works
 
-1. `gh repo create --template --clone` creates and clones the new repo.
+1. If `--source` is given, the source is cloned (via `gh repo clone` for a
+   GitHub repo, or `git clone` / `cp -R` for a local path) into `DIR`.
 2. `.github/template.yml` is parsed via `yq`.
 3. Each variable is prompted via `gum input` (or supplied via `--var`).
 4. `ccase` generates every requested case variant of the placeholder and the
@@ -147,9 +163,8 @@ overlapping ones (`template`).
 7. **Path pass** — `find -depth` walks deepest-first so parent renames don't
    invalidate child paths; `mv` is used to apply the same substitution to file
    and directory names.
-8. `.github/template.yml` is removed and the working tree committed as
-   `chore: apply template from <owner>/<repo>`.
-9. The commit is pushed.
+8. `.github/template.yml` is removed and the working tree committed on top of
+   the cloned history as `chore: apply template from <source>` (or `chore: apply template` without `--source`).
 
 ## Limitations
 

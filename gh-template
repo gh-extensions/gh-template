@@ -57,27 +57,24 @@ source "$_gh_template_source_dir/scripts/gh_template.sh"
 
 _show_help() {
 	cat <<'EOF'
-gh template — create a GitHub repository from a template and apply variable substitutions
+gh template — apply variable substitutions to a repository from a template config
 
 USAGE:
-    gh template create <new-repo> --template <owner/repo> [--var name=value]...
-    gh template apply [--config <path>] [--var name=value]... [--dry-run] [--force]
+    gh template apply [DIR] [--config <path>] [--var name=value]... [--dry-run] [--force]
+    gh template apply --source <owner/repo | path> [DIR] [--var name=value]... [--dry-run]
 
 DESCRIPTION:
-    Wraps `gh repo create --template` and post-processes the clone using a
-    .github/template.yml config in the template repo. Prompts for each
-    variable, performs case-aware find-and-replace across paths and contents,
-    deletes the config, and commits the result.
+    Reads a .github/template.yml config and performs case-aware find-and-replace
+    across file names and contents. With --source, clones the given GitHub repo
+    (or local path) first and applies substitution on the clone.
 
 COMMANDS:
-    create    Create a new repo from a template and apply substitutions
-    apply     Apply template.yml substitutions to the current directory
+    apply     Apply template.yml substitutions to a directory
 
 FLAGS:
     -V, --version   Print version
 
 SEE ALSO:
-    gh template create --help
     gh template apply --help
 EOF
 }
@@ -91,9 +88,6 @@ main() {
 	shift || true
 
 	case $cmd in
-	create)
-		_gh_template_create_cmd "$@"
-		;;
 	apply)
 		_gh_template_apply_cmd "$@"
 		;;
@@ -105,7 +99,7 @@ main() {
 		;;
 	*)
 		gum log --level error "unknown command '$cmd'"
-		gum log --level info "Available commands: create, apply"
+		gum log --level info "Available commands: apply"
 		gum log --level info "Run 'gh template --help' for usage information"
 		exit 1
 		;;
