@@ -1,0 +1,492 @@
+#!/usr/bin/env bash
+
+[ -z "${DEBUG:-}" ] || set -x
+
+set -euo pipefail
+
+# Parse the template config into TSV rows.
+#
+# Each row: <name>\t<text>\t<cases_csv>\t<scopes_csv>
+#
+# Usage: _gh_template_parse_config <config_path>
+_gh_template_parse_config() {
+	local config="$1"
+	yq -o=json '.variables' "$config" \
+		| jq -r '.[] | [.name, .text, ((.case // []) | join(",")), ((.scope // []) | join(","))] | @tsv'
+}
+
+# Emit case variants for a string given a comma-separated case list.
+#
+# Each line: <case_name>\t<value>
+#
+# Usage: _gh_template_case_variants <input> <cases_csv>
+_gh_template_case_variants() {
+	local input="$1"
+	local cases_csv="$2"
+	local case_name value
+	local cases=()
+	IFS=',' read -ra cases <<<"$cases_csv"
+	for case_name in "${cases[@]}"; do
+		[[ -z "$case_name" ]] && continue
+		if ! value=$(ccase -t "$case_name" -- "$input" 2>&1); then
+			gum log --level error "ccase failed for case '$case_name': $value"
+			return 1
+		fi
+		printf '%s\t%s\n' "$case_name" "$value"
+	done
+}
+
+# Prompt the user for each variable declared in the config.
+#
+# Honors overrides via the global associative array
+# _gh_template_var_overrides (key = variable name).
+#
+# Emits one line per variable: <name>\t<value>
+#
+# Usage: _gh_template_prompt_variables <config_path>
+_gh_template_prompt_variables() {
+	local config="$1"
+	local name text cases scopes value
+
+	while IFS=$'\t' read -r name text cases scopes; do
+		[[ -z "$name" ]] && continue
+		if [[ -n "${_gh_template_var_overrides[$name]+x}" ]]; then
+			value="${_gh_template_var_overrides[$name]}"
+		else
+			value=$(gum input --prompt "$text > " --placeholder "$name")
+		fi
+		if [[ -z "$value" ]]; then
+			gum log --level error "empty value for variable '$name'"
+			return 1
+		fi
+		printf '%s\t%s\n' "$name" "$value"
+	done < <(_gh_template_parse_config "$config")
+}
+
+# Build the ordered replacement list.
+#
+# Emits one line per replacement: <from>\t<to>\t<scopes_csv>
+# Ordered by descending length of <from>, ties broken by config order
+# then case order. The ordering ensures longer placeholders are replaced
+# before shorter overlapping ones (e.g. template-api before template).
+#
+# Usage: _gh_template_build_replacements <config_path> <values_input>
+#   values_input: newline-separated "<name>\t<value>" pairs
+_gh_template_build_replacements() {
+	local config_path="$1"
+	local values_input="$2"
+
+	local -A values_map=()
+	local name value
+	while IFS=$'\t' read -r name value; do
+		[[ -z "$name" ]] && continue
+		values_map["$name"]="$value"
+	done <<<"$values_input"
+
+	local idx=0
+	local text cases scopes
+	local raw
+	raw=$(
+		while IFS=$'\t' read -r name text cases scopes; do
+			[[ -z "$name" ]] && continue
+			value="${values_map[$name]:-}"
+			[[ -z "$value" ]] && continue
+
+			local -A placeholder_variants=()
+			local -A value_variants=()
+			local case_name v
+			while IFS=$'\t' read -r case_name v; do
+				placeholder_variants["$case_name"]="$v"
+			done < <(_gh_template_case_variants "$name" "$cases")
+			while IFS=$'\t' read -r case_name v; do
+				value_variants["$case_name"]="$v"
+			done < <(_gh_template_case_variants "$value" "$cases")
+
+			local case_order=0
+			local case_list=()
+			IFS=',' read -ra case_list <<<"$cases"
+			local from to len_key
+			for case_name in "${case_list[@]}"; do
+				[[ -z "$case_name" ]] && continue
+				from="${placeholder_variants[$case_name]:-}"
+				to="${value_variants[$case_name]:-}"
+				[[ -z "$from" || -z "$to" || "$from" == "$to" ]] && continue
+				len_key=$((999999 - ${#from}))
+				printf '%06d\t%06d\t%06d\t%s\t%s\t%s\n' \
+					"$len_key" "$idx" "$case_order" "$from" "$to" "$scopes"
+				((case_order++))
+			done
+			((idx++))
+		done < <(_gh_template_parse_config "$config_path")
+	)
+
+	# Deduplicate identical (from,to,scope) triples that occur across variables
+	# (e.g. kebab-case of "template" inside "template-api" path replacement
+	# would already be covered by the longer variant). Sort then awk-uniq on
+	# the from column keeps the first (longest) occurrence.
+	printf '%s\n' "$raw" \
+		| sort -t$'\t' -k1,1n -k2,2n -k3,3n \
+		| awk -F'\t' '!seen[$4]++' \
+		| cut -f4-
+}
+
+# Test whether a file is binary (skip during content substitution).
+#
+# Usage: _is_binary_file <path>
+# Returns 0 if binary, 1 otherwise.
+_is_binary_file() {
+	local f="$1"
+	local enc
+	enc=$(file -b --mime-encoding "$f" 2>/dev/null || echo "binary")
+	[[ "$enc" == "binary" ]]
+}
+
+# Substitute file contents in the repo.
+#
+# Walks every regular non-symlink, non-binary file under <root> (excluding
+# .git/) and applies each replacement whose scope includes "content".
+#
+# Usage: _gh_template_substitute_content <root> <pairs_input> [<dry_run>]
+#   pairs_input: newline-separated "<from>\t<to>\t<scopes_csv>" rows
+#   dry_run: non-empty string enables dry-run mode (print only)
+_gh_template_substitute_content() {
+	local root="$1"
+	local pairs_input="$2"
+	local dry_run="${3:-}"
+
+	local -a froms=() tos=()
+	local from to scopes
+	while IFS=$'\t' read -r from to scopes; do
+		[[ -z "$from" ]] && continue
+		[[ ",$scopes," == *,content,* ]] || continue
+		froms+=("$from")
+		tos+=("$to")
+	done <<<"$pairs_input"
+
+	[[ ${#froms[@]} -eq 0 ]] && return 0
+
+	local f i
+	while IFS= read -r -d '' f; do
+		[[ -L "$f" ]] && continue
+		_is_binary_file "$f" && continue
+		for i in "${!froms[@]}"; do
+			from="${froms[$i]}"
+			to="${tos[$i]}"
+			if [[ -n "$dry_run" ]]; then
+				if grep -qF -- "$from" "$f" 2>/dev/null; then
+					printf 'content: %s : %s -> %s\n' "$f" "$from" "$to"
+				fi
+			else
+				perl -i -pe 'BEGIN{$f=shift @ARGV;$t=shift @ARGV} s/\Q$f\E/$t/g' "$from" "$to" "$f"
+			fi
+		done
+	done < <(find "$root" -type f -not -path "*/.git" -not -path "*/.git/*" -print0)
+}
+
+# Substitute file and directory names in the repo.
+#
+# Uses find -depth so deeper paths are renamed first, preventing parent
+# rename from invalidating child paths.
+#
+# Usage: _gh_template_substitute_paths <root> <pairs_input> [<dry_run>]
+_gh_template_substitute_paths() {
+	local root="$1"
+	local pairs_input="$2"
+	local dry_run="${3:-}"
+
+	local from to scopes
+	while IFS=$'\t' read -r from to scopes; do
+		[[ -z "$from" ]] && continue
+		[[ ",$scopes," == *,path,* ]] || continue
+
+		local p base dir new
+		while IFS= read -r -d '' p; do
+			base=$(basename "$p")
+			dir=$(dirname "$p")
+			new="${base//${from}/${to}}"
+			if [[ "$new" != "$base" ]]; then
+				if [[ -n "$dry_run" ]]; then
+					printf 'path: %s -> %s/%s\n' "$p" "$dir" "$new"
+				else
+					mv -- "$p" "$dir/$new"
+				fi
+			fi
+		done < <(find "$root" -depth -not -path "*/.git" -not -path "*/.git/*" -name "*${from}*" -print0)
+	done <<<"$pairs_input"
+}
+
+# Apply template substitutions to a directory.
+#
+# Reads the config, prompts (or uses overrides from
+# _gh_template_var_overrides), builds the replacement list, performs
+# content then path substitution, deletes the config file, and creates
+# a git commit (skipped on dry-run).
+#
+# Commit message can be overridden via _gh_template_commit_msg.
+#
+# Usage: _gh_template_apply <repo_dir> [<config_path>] [<dry_run>]
+_gh_template_apply() {
+	local repo_dir="$1"
+	local config_path="${2:-$repo_dir/.github/template.yml}"
+	local dry_run="${3:-}"
+
+	if [[ ! -f "$config_path" ]]; then
+		gum log --level info "no template config at $config_path — nothing to apply"
+		return 0
+	fi
+
+	local values
+	values=$(_gh_template_prompt_variables "$config_path") || return 1
+
+	local replacements
+	replacements=$(_gh_template_build_replacements "$config_path" "$values")
+
+	if [[ -z "$replacements" ]]; then
+		gum log --level warn "no replacements computed"
+		return 0
+	fi
+
+	if [[ -n "$dry_run" ]]; then
+		gum log --level info "Dry run — no changes will be made"
+	fi
+
+	_gh_template_substitute_content "$repo_dir" "$replacements" "$dry_run"
+	_gh_template_substitute_paths "$repo_dir" "$replacements" "$dry_run"
+
+	if [[ -n "$dry_run" ]]; then
+		printf 'config: would remove %s\n' "$config_path"
+		return 0
+	fi
+
+	rm -f "$config_path"
+
+	if ! git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
+		gum log --level info "not a git repo — skipping commit"
+		return 0
+	fi
+
+	git -C "$repo_dir" add -A
+	if git -C "$repo_dir" diff --cached --quiet; then
+		gum log --level info "no changes to commit"
+		return 0
+	fi
+
+	local msg="${_gh_template_commit_msg:-chore: apply template}"
+	git -C "$repo_dir" commit -m "$msg" >/dev/null
+	gum log --level info "Committed: $msg"
+}
+
+# Print usage for the apply subcommand.
+_show_apply_help() {
+	cat <<'EOF'
+gh template apply — apply template.yml substitutions to the current directory
+
+USAGE:
+    gh template apply [--config <path>] [--var name=value]... [--dry-run] [--force]
+
+DESCRIPTION:
+    Reads .github/template.yml (or --config <path>), prompts for each
+    variable via gum (or accepts --var name=value pairs non-interactively),
+    performs case-aware substitution across file contents and paths, deletes
+    the config file, and creates a single commit.
+
+FLAGS:
+    --config <path>      Use a different config file (default: .github/template.yml)
+    --var name=value     Provide variable values non-interactively (repeatable)
+    --dry-run            Print planned changes without modifying anything
+    --force              Run even if the working tree is dirty
+
+EXAMPLES:
+    gh template apply
+    gh template apply --dry-run
+    gh template apply --var template-org=acme --var template-api='billing api' --var template=billing
+EOF
+}
+
+# Apply subcommand entrypoint.
+#
+# Parses argv, sets _gh_template_var_overrides from --var flags, then
+# invokes _gh_template_apply against the current working directory.
+#
+# Usage: _gh_template_apply_cmd [args...]
+_gh_template_apply_cmd() {
+	local config_path=""
+	local dry_run=""
+	local force=""
+	declare -gA _gh_template_var_overrides=()
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--help | -h | help)
+			_show_apply_help
+			return 0
+			;;
+		--config)
+			shift
+			[[ $# -eq 0 ]] && {
+				gum log --level error "--config requires a value"
+				return 1
+			}
+			config_path="$1"
+			;;
+		--var)
+			shift
+			[[ $# -eq 0 ]] && {
+				gum log --level error "--var requires name=value"
+				return 1
+			}
+			local pair="$1"
+			if [[ "$pair" != *=* ]]; then
+				gum log --level error "--var expects name=value (got '$pair')"
+				return 1
+			fi
+			_gh_template_var_overrides["${pair%%=*}"]="${pair#*=}"
+			;;
+		--dry-run) dry_run="1" ;;
+		--force) force="1" ;;
+		-*)
+			gum log --level error "unknown flag '$1'"
+			return 1
+			;;
+		*)
+			gum log --level error "unexpected argument '$1'"
+			return 1
+			;;
+		esac
+		shift
+	done
+
+	local repo_dir
+	repo_dir=$(pwd)
+
+	if [[ -z "$config_path" ]]; then
+		config_path="$repo_dir/.github/template.yml"
+	fi
+
+	if [[ -z "$force" ]] && git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
+		if [[ -n "$(git -C "$repo_dir" status --porcelain 2>/dev/null)" ]]; then
+			gum log --level error "working tree is dirty — commit or use --force"
+			return 1
+		fi
+	fi
+
+	_gh_template_apply "$repo_dir" "$config_path" "$dry_run"
+}
+
+# Print usage for the create subcommand.
+_show_create_help() {
+	cat <<'EOF'
+gh template create — create a new GitHub repository from a template
+
+USAGE:
+    gh template create <new-repo> --template <owner/repo> [--public|--private|--internal] [--var name=value]...
+
+DESCRIPTION:
+    Creates a new GitHub repository from the given template via
+    `gh repo create --template`, clones it locally, applies the
+    substitutions declared in .github/template.yml, removes the config,
+    commits and pushes.
+
+FLAGS:
+    --template <owner/repo>   Template repository (required)
+    --public                  Create a public repository
+    --private                 Create a private repository (default)
+    --internal                Create an internal repository
+    --var name=value          Provide variable values non-interactively (repeatable)
+
+EXAMPLES:
+    gh template create my-new-svc --template my-org/sample-template
+    gh template create acme/billing-api --template my-org/sample-template --var template=billing
+EOF
+}
+
+# Create subcommand entrypoint.
+#
+# Calls `gh repo create --template --clone`, then applies substitutions
+# in the cloned directory and pushes the resulting commit.
+#
+# Usage: _gh_template_create_cmd [args...]
+_gh_template_create_cmd() {
+	local new_repo=""
+	local template_ref=""
+	local visibility=""
+	declare -gA _gh_template_var_overrides=()
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--help | -h | help)
+			_show_create_help
+			return 0
+			;;
+		--template)
+			shift
+			[[ $# -eq 0 ]] && {
+				gum log --level error "--template requires a value"
+				return 1
+			}
+			template_ref="$1"
+			;;
+		--public | --private | --internal) visibility="$1" ;;
+		--var)
+			shift
+			[[ $# -eq 0 ]] && {
+				gum log --level error "--var requires name=value"
+				return 1
+			}
+			local pair="$1"
+			if [[ "$pair" != *=* ]]; then
+				gum log --level error "--var expects name=value (got '$pair')"
+				return 1
+			fi
+			_gh_template_var_overrides["${pair%%=*}"]="${pair#*=}"
+			;;
+		-*)
+			gum log --level error "unknown flag '$1'"
+			return 1
+			;;
+		*)
+			if [[ -z "$new_repo" ]]; then
+				new_repo="$1"
+			else
+				gum log --level error "unexpected argument '$1'"
+				return 1
+			fi
+			;;
+		esac
+		shift
+	done
+
+	if [[ -z "$new_repo" ]]; then
+		gum log --level error "missing <new-repo> argument"
+		gum log --level info "Usage: gh template create <new-repo> --template <owner/repo>"
+		return 1
+	fi
+	if [[ -z "$template_ref" ]]; then
+		gum log --level error "missing --template <owner/repo>"
+		return 1
+	fi
+
+	visibility="${visibility:---private}"
+
+	gum log --level info "Creating '$new_repo' from template '$template_ref'..."
+	if ! gh repo create "$new_repo" --template "$template_ref" --clone "$visibility"; then
+		gum log --level error "failed to create repository"
+		return 1
+	fi
+
+	local clone_dir
+	clone_dir=$(basename "$new_repo")
+
+	if [[ ! -d "$clone_dir" ]]; then
+		gum log --level error "expected clone at '$clone_dir' but directory is missing"
+		return 1
+	fi
+
+	_gh_template_commit_msg="chore: apply template from $template_ref" \
+		_gh_template_apply "$clone_dir" "$clone_dir/.github/template.yml"
+
+	if ! git -C "$clone_dir" push 2>/dev/null; then
+		gum log --level warn "push failed — run 'git push' from '$clone_dir' manually"
+	fi
+}
+

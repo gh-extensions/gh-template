@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+
+[ -z "${DEBUG:-}" ] || set -x
+
+set -euo pipefail
+
+_gh_template_source_dir=$(dirname "${BASH_SOURCE[0]}")
+
+# Verify required dependencies are installed.
+#
+# Checks for Bash 4.4+ and the CLI tools used by the substitution pipeline.
+# Prints installation hints and exits if any are missing.
+_check_dependencies() {
+	if [[ "${BASH_VERSINFO[0]}" -lt 4 || ("${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -lt 4) ]]; then
+		echo "gh-template: requires Bash 4.4+ (found ${BASH_VERSION})" >&2
+		echo "  macOS: brew install bash" >&2
+		exit 1
+	fi
+
+	local missing=()
+
+	if ! command -v gh &>/dev/null; then
+		missing+=("gh    — https://cli.github.com")
+	fi
+	if ! command -v gum &>/dev/null; then
+		missing+=("gum   — https://github.com/charmbracelet/gum")
+	fi
+	if ! command -v jq &>/dev/null; then
+		missing+=("jq    — https://jqlang.github.io/jq")
+	fi
+	if ! command -v yq &>/dev/null; then
+		missing+=("yq    — https://github.com/mikefarah/yq")
+	fi
+	if ! command -v git &>/dev/null; then
+		missing+=("git   — https://git-scm.com")
+	fi
+	if ! command -v ccase &>/dev/null; then
+		missing+=("ccase — https://github.com/stringcase/ccase")
+	fi
+	if ! command -v perl &>/dev/null; then
+		missing+=("perl  — https://www.perl.org")
+	fi
+	if ! command -v file &>/dev/null; then
+		missing+=("file  — https://www.darwinsys.com/file")
+	fi
+
+	if [[ ${#missing[@]} -gt 0 ]]; then
+		echo "gh-template: missing required dependencies:" >&2
+		for dep in "${missing[@]}"; do
+			echo "  $dep" >&2
+		done
+		exit 1
+	fi
+}
+
+_check_dependencies
+
+# shellcheck source=scripts/gh_template.sh
+source "$_gh_template_source_dir/scripts/gh_template.sh"
+
+_show_help() {
+	cat <<'EOF'
+gh template — create a GitHub repository from a template and apply variable substitutions
+
+USAGE:
+    gh template create <new-repo> --template <owner/repo> [--var name=value]...
+    gh template apply [--config <path>] [--var name=value]... [--dry-run] [--force]
+
+DESCRIPTION:
+    Wraps `gh repo create --template` and post-processes the clone using a
+    .github/template.yml config in the template repo. Prompts for each
+    variable, performs case-aware find-and-replace across paths and contents,
+    deletes the config, and commits the result.
+
+COMMANDS:
+    create    Create a new repo from a template and apply substitutions
+    apply     Apply template.yml substitutions to the current directory
+
+FLAGS:
+    -V, --version   Print version
+
+SEE ALSO:
+    gh template create --help
+    gh template apply --help
+EOF
+}
+
+_show_version() {
+	cat "$_gh_template_source_dir/version.txt"
+}
+
+main() {
+	local cmd="${1:-}"
+	shift || true
+
+	case $cmd in
+	create)
+		_gh_template_create_cmd "$@"
+		;;
+	apply)
+		_gh_template_apply_cmd "$@"
+		;;
+	--version | -V)
+		_show_version
+		;;
+	--help | -h | help | "")
+		_show_help
+		;;
+	*)
+		gum log --level error "unknown command '$cmd'"
+		gum log --level info "Available commands: create, apply"
+		gum log --level info "Run 'gh template --help' for usage information"
+		exit 1
+		;;
+	esac
+}
+
+main "$@"
