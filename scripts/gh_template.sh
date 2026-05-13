@@ -20,6 +20,13 @@ export _GH_TEMPLATE_SCRIPT
 _gh_template_spin() {
 	local title="$1"
 	shift
+	# Escape hatch for debugging: run inline so stderr/stdout (and set -x
+	# traces under DEBUG=1) are visible instead of being captured by gum.
+	if [[ -n "${GH_TEMPLATE_NO_SPIN:-}" || -n "${DEBUG:-}" ]]; then
+		gum log --level info "$title"
+		"$@"
+		return $?
+	fi
 	# shellcheck disable=SC2016 # intentional: vars expand in the spawned bash
 	gum spin --show-error --title "$title" -- \
 		bash -c 'set -euo pipefail; source "$_GH_TEMPLATE_SCRIPT"; "$@"' bash "$@"
