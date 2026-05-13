@@ -235,7 +235,7 @@ EOF
 # _gh_template_apply
 # ---------------------------------------------------------------------------
 
-@test "_gh_template_apply: end-to-end on a fixture" {
+@test "_gh_template_apply: end-to-end on a fixture leaves changes uncommitted" {
 	local repo="$BATS_TEST_TMPDIR/repo"
 	_init_repo "$repo"
 	_make_config "$repo/.github/template.yml"
@@ -271,12 +271,12 @@ EOF
 	[[ "$output" != *"template-api"* ]]
 	[[ "$output" != *"TemplateApi"* ]]
 
+	# No commit was created — just the original initial commit.
 	local commits
 	commits=$(git -C "$repo" rev-list --count HEAD)
-	[[ "$commits" -eq 2 ]]
-	local msg
-	msg=$(git -C "$repo" log -1 --pretty=%s)
-	[[ "$msg" == *"apply template"* ]]
+	[[ "$commits" -eq 1 ]]
+	# Working tree carries the template changes.
+	[[ -n "$(git -C "$repo" status --porcelain)" ]]
 }
 
 @test "_gh_template_apply: no-op when config missing" {
@@ -438,13 +438,11 @@ EOF
 	run cat "./dst/src/billing-api/code.txt"
 	[[ "$output" == "billing-api BillingApi" ]]
 
-	# Should have an extra commit on top of the source's history
+	# Source's history is preserved, changes left uncommitted for the user.
 	local commits
 	commits=$(git -C "./dst" rev-list --count HEAD)
-	[[ "$commits" -eq 2 ]]
-	local msg
-	msg=$(git -C "./dst" log -1 --pretty=%s)
-	[[ "$msg" == *"apply template from"* ]]
+	[[ "$commits" -eq 1 ]]
+	[[ -n "$(git -C "./dst" status --porcelain)" ]]
 }
 
 @test "_gh_template_apply_cmd: --source refuses non-empty target without --force" {
@@ -494,13 +492,13 @@ EOF
 	# dst's pre-existing file survived
 	[[ -f "$dst/keep.txt" ]]
 
-	# dst's existing history is preserved with a commit on top
+	# dst's history is untouched (still just the initial commit)
 	run git -C "$dst" log --pretty=%s
-	[[ "$output" == *"apply template from"* ]]
-	[[ "$output" == *"dst initial"* ]]
+	[[ "$output" == "dst initial" ]]
+	[[ "$(git -C "$dst" rev-parse HEAD)" == "$dst_initial" ]]
 
-	# dst's initial commit is reachable from HEAD (history not rewritten)
-	git -C "$dst" merge-base --is-ancestor "$dst_initial" HEAD
+	# But the template changes are staged in the working tree
+	[[ -n "$(git -C "$dst" status --porcelain)" ]]
 }
 
 @test "_gh_template_apply_cmd: --source with no DIR defaults to CWD" {

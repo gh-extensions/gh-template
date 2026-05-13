@@ -6,12 +6,12 @@
 [![Release](https://img.shields.io/github/v/release/gh-extensions/gh-template)](https://github.com/gh-extensions/gh-template/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`gh template` wraps `gh repo create --template` and post-processes the clone
-based on a `.github/template.yml` config that lives in the template repo. It
-prompts for each declared variable, generates every requested case variant via
+`gh template` post-processes a directory based on a `.github/template.yml`
+config that lives in the template repo. It prompts for each declared variable,
+generates every requested case variant via
 [`ccase`](https://github.com/stringcase/ccase), and performs case-aware
 find-and-replace across file names and contents. The config file is then
-deleted and the result is committed and pushed in one go.
+removed and the working tree is left for you to review and commit.
 
 ## Requirements
 
@@ -59,7 +59,7 @@ gh template apply --help         # apply subcommand help
 
 Runs the substitution against `DIR` (default: the current working directory).
 Useful when you've already cloned the template repo yourself and want to
-bootstrap it in place, or to dry-run the changes before committing.
+bootstrap it in place, or to preview the planned changes with `--dry-run`.
 
 ```bash
 gh template apply                   # interactive prompts on CWD
@@ -103,15 +103,13 @@ freshly-created remote repo:
 gh repo create acme/my-svc --clone --private
 cd my-svc
 gh template apply --source acme/sample-template --force
+git diff                                  # review
+git add -A && git commit -m "bootstrap from template"
 git push
 ```
 
-Publishing into a brand-new directory instead is a separate step:
-
-```bash
-gh template apply --source acme/sample-template ./my-svc
-gh repo create acme/my-svc --source ./my-svc --push --private
-```
+`gh template apply` itself never commits — the working tree is left dirty so
+you can review (`git status`, `git diff`) and commit however you prefer.
 
 ## Config schema
 
@@ -176,8 +174,8 @@ overlapping ones (`template`).
 7. **Path pass** — `find -depth` walks deepest-first so parent renames don't
    invalidate child paths; `mv` is used to apply the same substitution to file
    and directory names.
-8. `.github/template.yml` is removed and the working tree committed on top of
-   the cloned history as `chore: apply template from <source>` (or `chore: apply template` without `--source`).
+8. `.github/template.yml` is removed and the working tree is left dirty for
+   the user to review with `git diff` and commit however they prefer.
 
 ## Limitations
 

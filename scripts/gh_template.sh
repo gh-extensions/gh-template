@@ -269,10 +269,8 @@ _gh_template_run_substitution() {
 #
 # Reads the config, prompts (or uses overrides from
 # _gh_template_var_overrides), builds the replacement list, performs
-# content then path substitution, deletes the config file, and creates
-# a git commit (skipped on dry-run).
-#
-# Commit message can be overridden via _gh_template_commit_msg.
+# content then path substitution, and deletes the config file. Leaves
+# the working tree dirty so the user can review and commit themselves.
 #
 # Usage: _gh_template_apply <repo_dir> [<config_path>] [<dry_run>]
 _gh_template_apply() {
@@ -307,20 +305,11 @@ _gh_template_apply() {
 
 	rm -f "$config_path"
 
-	if ! git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
-		gum log --level info "not a git repo — skipping commit"
-		return 0
+	if git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
+		gum log --level info "Done — review with 'git status' / 'git diff' and commit when ready"
+	else
+		gum log --level info "Done"
 	fi
-
-	git -C "$repo_dir" add -A
-	if git -C "$repo_dir" diff --cached --quiet; then
-		gum log --level info "no changes to commit"
-		return 0
-	fi
-
-	local msg="${_gh_template_commit_msg:-chore: apply template}"
-	git -C "$repo_dir" commit -m "$msg" >/dev/null
-	gum log --level info "Committed: $msg"
 }
 
 # Populate <dir> with the contents of a template source.
@@ -519,7 +508,6 @@ _gh_template_apply_cmd() {
 			fi
 			rm -rf "$tmp"
 		fi
-		_gh_template_commit_msg="chore: apply template from $source"
 	else
 		if [[ ! -d "$target_dir" ]]; then
 			gum log --level error "directory not found: $target_dir"
