@@ -9,10 +9,17 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_DIRNAME")" && pwd)"
 
 setup() {
 	export HOME="$BATS_TEST_TMPDIR"
+	export _GH_TEMPLATE_SCRIPT="$REPO_ROOT/scripts/gh_template.sh"
 
 	gum() {
 		case "$1" in
 		log) shift; shift; shift; echo "$@" ;;
+		spin)
+			# Skip everything up to and including --, then run the rest.
+			while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
+			shift || true
+			"$@"
+			;;
 		input)
 			# Default mock: echo the placeholder so tests can drive prompts via overrides.
 			while [[ $# -gt 0 ]]; do
@@ -39,7 +46,9 @@ setup() {
 			_gh_template_case_variants _gh_template_prompt_variables \
 			_gh_template_build_replacements _gh_template_substitute_content \
 			_gh_template_substitute_paths _gh_template_apply \
+			_gh_template_run_substitution \
 			_gh_template_apply_cmd _gh_template_clone_source \
+			_gh_template_clone_overlay _gh_template_spin \
 			_show_apply_help _is_binary_file
 	)"
 }

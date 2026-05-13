@@ -4,6 +4,27 @@
 
 set -euo pipefail
 
+# Absolute path to this script, exported so that subprocesses spawned by
+# `gum spin` can re-source it and invoke functions from this file.
+_GH_TEMPLATE_SCRIPT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
+export _GH_TEMPLATE_SCRIPT
+
+# Run a function inside `gum spin` so the user sees a progress spinner
+# while a long-running step (clone, substitution) executes.
+#
+# gum spin invokes its command in a separate process, so we spawn a
+# fresh bash that re-sources this script before invoking the named
+# function. _GH_TEMPLATE_SCRIPT is inherited via env.
+#
+# Usage: _gh_template_spin <title> <function-name> [args...]
+_gh_template_spin() {
+	local title="$1"
+	shift
+	# shellcheck disable=SC2016 # intentional: vars expand in the spawned bash
+	gum spin --show-error --title "$title" -- \
+		bash -c 'set -euo pipefail; source "$_GH_TEMPLATE_SCRIPT"; "$@"' bash "$@"
+}
+
 # Parse the template config into TSV rows.
 #
 # Each row: <name>\t<text>\t<cases_csv>\t<scopes_csv>
@@ -224,6 +245,26 @@ _gh_template_substitute_paths() {
 	done <<<"$pairs_input"
 }
 
+# Internal helper that runs the slow part of the apply flow: build the
+# replacement list, then perform content + path substitution. Wrapped in
+# `gum spin` by _gh_template_apply so the user sees progress.
+#
+# Usage: _gh_template_run_substitution <repo_dir> <config_path> <values>
+_gh_template_run_substitution() {
+	local repo_dir="$1"
+	local config_path="$2"
+	local values="$3"
+
+	local replacements
+	replacements=$(_gh_template_build_replacements "$config_path" "$values")
+	if [[ -z "$replacements" ]]; then
+		return 0
+	fi
+
+	_gh_template_substitute_content "$repo_dir" "$replacements"
+	_gh_template_substitute_paths "$repo_dir" "$replacements"
+}
+
 # Apply template substitutions to a directory.
 #
 # Reads the config, prompts (or uses overrides from
@@ -247,25 +288,22 @@ _gh_template_apply() {
 	local values
 	values=$(_gh_template_prompt_variables "$config_path") || return 1
 
-	local replacements
-	replacements=$(_gh_template_build_replacements "$config_path" "$values")
-
-	if [[ -z "$replacements" ]]; then
-		gum log --level warn "no replacements computed"
-		return 0
-	fi
-
 	if [[ -n "$dry_run" ]]; then
 		gum log --level info "Dry run — no changes will be made"
-	fi
-
-	_gh_template_substitute_content "$repo_dir" "$replacements" "$dry_run"
-	_gh_template_substitute_paths "$repo_dir" "$replacements" "$dry_run"
-
-	if [[ -n "$dry_run" ]]; then
+		local replacements
+		replacements=$(_gh_template_build_replacements "$config_path" "$values")
+		if [[ -z "$replacements" ]]; then
+			gum log --level warn "no replacements computed"
+			return 0
+		fi
+		_gh_template_substitute_content "$repo_dir" "$replacements" "$dry_run"
+		_gh_template_substitute_paths "$repo_dir" "$replacements" "$dry_run"
 		printf 'config: would remove %s\n' "$config_path"
 		return 0
 	fi
+
+	_gh_template_spin "Substituting template variables..." \
+		_gh_template_run_substitution "$repo_dir" "$config_path" "$values"
 
 	rm -f "$config_path"
 
@@ -324,6 +362,24 @@ _gh_template_clone_source() {
 		return 1
 		;;
 	esac
+}
+
+# Overlay a source onto a non-empty target directory.
+#
+# Clones the source into <tmp>/clone, removes the cloned .git, then
+# copies the remaining contents onto <target>. The target's existing
+# .git and any files not present in the source are preserved.
+#
+# Caller is responsible for cleaning up <tmp>.
+#
+# Usage: _gh_template_clone_overlay <source> <tmp_dir> <target>
+_gh_template_clone_overlay() {
+	local source="$1"
+	local tmp="$2"
+	local target="$3"
+	_gh_template_clone_source "$source" "$tmp/clone" || return 1
+	rm -rf "$tmp/clone/.git"
+	cp -R "$tmp/clone"/. "$target"/
 }
 
 # Print usage for the apply subcommand.
@@ -444,9 +500,9 @@ _gh_template_apply_cmd() {
 			return 1
 		fi
 
-		gum log --level info "Cloning '$source' into '$target_dir'..."
 		if [[ -z "$target_has_content" ]]; then
-			if ! _gh_template_clone_source "$source" "$target_dir"; then
+			if ! _gh_template_spin "Cloning '$source' into '$target_dir'..." \
+				_gh_template_clone_source "$source" "$target_dir"; then
 				return 1
 			fi
 		else
@@ -456,12 +512,11 @@ _gh_template_apply_cmd() {
 			# in the source) are preserved.
 			local tmp
 			tmp=$(mktemp -d)
-			if ! _gh_template_clone_source "$source" "$tmp/clone"; then
+			if ! _gh_template_spin "Overlaying '$source' onto '$target_dir'..." \
+				_gh_template_clone_overlay "$source" "$tmp" "$target_dir"; then
 				rm -rf "$tmp"
 				return 1
 			fi
-			rm -rf "$tmp/clone/.git"
-			cp -R "$tmp/clone"/. "$target_dir"/
 			rm -rf "$tmp"
 		fi
 		_gh_template_commit_msg="chore: apply template from $source"
