@@ -341,7 +341,9 @@ FLAGS:
     --config <path>      Use a different config file (default: .github/template.yml)
     --var name=value     Provide variable values non-interactively (repeatable)
     --dry-run            Print planned changes without modifying anything
-    --force              Run on a dirty tree (no-source mode only)
+    --force              With --source: overlay the source on top of a
+                         non-empty DIR (preserving DIR's existing .git).
+                         Without --source: run on a dirty working tree.
 
 EXAMPLES:
     gh template apply
@@ -422,13 +424,35 @@ _gh_template_apply_cmd() {
 	target_dir="${target_dir:-$(pwd)}"
 
 	if [[ -n "$source" ]]; then
+		local target_has_content=""
 		if [[ -d "$target_dir" && -n "$(ls -A "$target_dir" 2>/dev/null)" ]]; then
-			gum log --level error "target '$target_dir' is not empty — pick an empty directory"
+			target_has_content="1"
+		fi
+
+		if [[ -n "$target_has_content" && -z "$force" ]]; then
+			gum log --level error "target '$target_dir' is not empty — pick an empty directory or pass --force"
 			return 1
 		fi
+
 		gum log --level info "Cloning '$source' into '$target_dir'..."
-		if ! _gh_template_clone_source "$source" "$target_dir"; then
-			return 1
+		if [[ -z "$target_has_content" ]]; then
+			if ! _gh_template_clone_source "$source" "$target_dir"; then
+				return 1
+			fi
+		else
+			# Overlay mode: clone to a temp directory, drop the source's
+			# .git, then copy the remaining contents on top of the target.
+			# The target's existing .git (and any other files not present
+			# in the source) are preserved.
+			local tmp
+			tmp=$(mktemp -d)
+			if ! _gh_template_clone_source "$source" "$tmp/clone"; then
+				rm -rf "$tmp"
+				return 1
+			fi
+			rm -rf "$tmp/clone/.git"
+			cp -R "$tmp/clone"/. "$target_dir"/
+			rm -rf "$tmp"
 		fi
 		_gh_template_commit_msg="chore: apply template from $source"
 	else

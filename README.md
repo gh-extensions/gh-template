@@ -76,8 +76,7 @@ is a no-op (exit 0) when `.github/template.yml` is already gone.
 With `--source`, `gh template` populates `DIR` with the contents of the source
 — either a GitHub repo (`owner/repo`) or a local path — and then applies the
 substitution there. The source's files land directly inside `DIR`; no extra
-subdirectory is created. `DIR` defaults to the current working directory, and
-must be empty (or not exist yet) when `--source` is used.
+subdirectory is created. `DIR` defaults to the current working directory.
 
 ```bash
 # Apply into an empty target directory
@@ -94,7 +93,20 @@ gh template apply --source acme/sample-template ./my-svc \
   --var template-org=acme --var template-api='billing api' --var template=billing
 ```
 
-Publishing the result to GitHub is a separate step:
+By default `DIR` must be empty. Use `--force` to overlay the source onto a
+non-empty `DIR` — the source's `.git` is dropped and its files are laid down
+on top of whatever already exists, preserving `DIR`'s existing `.git` and any
+files not present in the source. This is the natural fit for bootstrapping a
+freshly-created remote repo:
+
+```bash
+gh repo create acme/my-svc --clone --private
+cd my-svc
+gh template apply --source acme/sample-template --force
+git push
+```
+
+Publishing into a brand-new directory instead is a separate step:
 
 ```bash
 gh template apply --source acme/sample-template ./my-svc

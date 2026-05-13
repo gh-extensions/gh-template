@@ -401,7 +401,7 @@ EOF
 	[[ "$msg" == *"apply template from"* ]]
 }
 
-@test "_gh_template_apply_cmd: --source refuses non-empty existing target" {
+@test "_gh_template_apply_cmd: --source refuses non-empty target without --force" {
 	local src="$BATS_TEST_TMPDIR/src"
 	_init_repo "$src"
 	_make_config "$src/.github/template.yml"
@@ -415,6 +415,46 @@ EOF
 	run _gh_template_apply_cmd --source "$src" ./dst
 	[[ "$status" -ne 0 ]]
 	[[ "$output" == *"not empty"* ]]
+}
+
+@test "_gh_template_apply_cmd: --source --force overlays onto non-empty target, preserving .git" {
+	local src="$BATS_TEST_TMPDIR/src"
+	_init_repo "$src"
+	_make_config "$src/.github/template.yml"
+	echo "template-api" >"$src/code.txt"
+	git -C "$src" add -A
+	git -C "$src" commit -q -m "src initial"
+
+	# Target: a fresh repo with its own .git and an existing file
+	local dst="$BATS_TEST_TMPDIR/dst"
+	_init_repo "$dst"
+	echo "preserved" >"$dst/keep.txt"
+	git -C "$dst" add -A
+	git -C "$dst" commit -q -m "dst initial"
+	local dst_initial
+	dst_initial=$(git -C "$dst" rev-parse HEAD)
+
+	cd "$BATS_TEST_TMPDIR"
+	_gh_template_apply_cmd --source "$src" "$dst" --force \
+		--var template-org=acme \
+		--var template-api='billing api' \
+		--var template=billing
+
+	# Source's content landed inside dst
+	[[ -f "$dst/code.txt" ]]
+	run cat "$dst/code.txt"
+	[[ "$output" == "billing-api" ]]
+
+	# dst's pre-existing file survived
+	[[ -f "$dst/keep.txt" ]]
+
+	# dst's existing history is preserved with a commit on top
+	run git -C "$dst" log --pretty=%s
+	[[ "$output" == *"apply template from"* ]]
+	[[ "$output" == *"dst initial"* ]]
+
+	# dst's initial commit is reachable from HEAD (history not rewritten)
+	git -C "$dst" merge-base --is-ancestor "$dst_initial" HEAD
 }
 
 @test "_gh_template_apply_cmd: --source with no DIR defaults to CWD" {
