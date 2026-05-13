@@ -545,8 +545,8 @@ _gh_template_apply_cmd() {
 		fi
 
 		if [[ -z "$target_has_content" ]]; then
-			if ! _gh_template_spin "Cloning '$source' into '$target_dir'..." \
-				_gh_template_clone_source "$source" "$target_dir"; then
+			gum log --level info "Cloning '$source' into '$target_dir'..."
+			if ! _gh_template_clone_source "$source" "$target_dir"; then
 				return 1
 			fi
 		else
@@ -556,8 +556,8 @@ _gh_template_apply_cmd() {
 			# in the source) are preserved.
 			local tmp
 			tmp=$(mktemp -d)
-			if ! _gh_template_spin "Overlaying '$source' onto '$target_dir'..." \
-				_gh_template_clone_overlay "$source" "$tmp" "$target_dir"; then
+			gum log --level info "Overlaying '$source' onto '$target_dir'..."
+			if ! _gh_template_clone_overlay "$source" "$tmp" "$target_dir"; then
 				rm -rf "$tmp"
 				return 1
 			fi
