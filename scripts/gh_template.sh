@@ -45,9 +45,19 @@ _gh_template_case_variants() {
 # Usage: _gh_template_prompt_variables <config_path>
 _gh_template_prompt_variables() {
 	local config="$1"
-	local name text cases scopes value
+	local name text cases scopes value row
+	# Buffer the entire config first. If we ran `gum input` inside a
+	# `while read … < <(parse_config)` loop, gum would inherit the process
+	# substitution as its stdin, go non-interactive, and consume the
+	# remaining TSV as the "value" for the first variable.
+	local rows=()
+	while IFS= read -r row; do
+		rows+=("$row")
+	done < <(_gh_template_parse_config "$config")
 
-	while IFS=$'\t' read -r name text cases scopes; do
+	for row in "${rows[@]}"; do
+		[[ -z "$row" ]] && continue
+		IFS=$'\t' read -r name text cases scopes <<<"$row"
 		[[ -z "$name" ]] && continue
 		if [[ -n "${_gh_template_var_overrides[$name]+x}" ]]; then
 			value="${_gh_template_var_overrides[$name]}"
@@ -59,7 +69,7 @@ _gh_template_prompt_variables() {
 			return 1
 		fi
 		printf '%s\t%s\n' "$name" "$value"
-	done < <(_gh_template_parse_config "$config")
+	done
 }
 
 # Build the ordered replacement list.

@@ -146,6 +146,43 @@ template\tsvc'
 # _gh_template_prompt_variables
 # ---------------------------------------------------------------------------
 
+@test "_gh_template_prompt_variables: calls gum input once per variable when no override is given" {
+	local cfg="$BATS_TEST_TMPDIR/template.yml"
+	_make_config "$cfg"
+	declare -gA _gh_template_var_overrides=()
+
+	# Mock gum so it errors if stdin is not a TTY — this guards against
+	# the regression where gum inherited a process substitution as stdin
+	# and consumed the whole config as its value.
+	gum() {
+		case "$1" in
+		log) shift; shift; shift; echo "$@" ;;
+		input)
+			if [[ ! -t 0 ]] && [[ -s /dev/stdin ]] && read -t 0 -N 0 <&0 2>/dev/null; then
+				echo "STDIN_LEAKED" >&2
+				return 1
+			fi
+			local placeholder=""
+			while [[ $# -gt 0 ]]; do
+				if [[ "$1" == "--placeholder" ]]; then
+					shift
+					placeholder="$1"
+				fi
+				shift
+			done
+			echo "input-for-${placeholder}"
+			;;
+		esac
+	}
+	export -f gum
+
+	run _gh_template_prompt_variables "$cfg"
+	[[ "$status" -eq 0 ]]
+	[[ "$output" == *"template-org"$'\t'"input-for-template-org"* ]]
+	[[ "$output" == *"template-api"$'\t'"input-for-template-api"* ]]
+	[[ "$output" == *"template"$'\t'"input-for-template"* ]]
+}
+
 @test "_gh_template_prompt_variables: honors --var overrides" {
 	local cfg="$BATS_TEST_TMPDIR/template.yml"
 	_make_config "$cfg"
