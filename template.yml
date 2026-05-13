@@ -11,3 +11,10 @@ variables:
     name: template
     scope: [path, content]
     case: [camel, snake, kebab, pascal]
+
+# Glob patterns of files/dirs to leave untouched.
+# Patterns without '/' match basenames anywhere; patterns with '/' match
+# the path relative to the repo root.
+ignore:
+  - "*.tmpl"
+  - "vendor/*"

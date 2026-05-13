@@ -42,7 +42,8 @@ setup() {
 	eval "$(
 		# shellcheck source=../scripts/gh_template.sh
 		source "$REPO_ROOT/scripts/gh_template.sh"
-		declare -f _gh_template_parse_config \
+		declare -f _gh_template_parse_config _gh_template_parse_ignore \
+			_gh_template_path_ignored \
 			_gh_template_case_variants _gh_template_prompt_variables \
 			_gh_template_build_replacements _gh_template_substitute_content \
 			_gh_template_substitute_paths _gh_template_apply \
@@ -279,6 +280,36 @@ EOF
 	[[ -n "$(git -C "$repo" status --porcelain)" ]]
 }
 
+@test "_gh_template_apply: honors top-level ignore globs" {
+	local repo="$BATS_TEST_TMPDIR/repo"
+	_init_repo "$repo"
+	mkdir -p "$repo/.github"
+	cat >"$repo/.github/template.yml" <<'EOF'
+variables:
+  - text: "Name?"
+    name: template-api
+    case: [kebab]
+    scope: [path, content]
+ignore:
+  - "*.tmpl"
+EOF
+	echo "template-api" >"$repo/keep.tmpl"
+	echo "template-api" >"$repo/replace.txt"
+	git -C "$repo" add -A
+	git -C "$repo" commit -q -m "initial"
+
+	declare -gA _gh_template_var_overrides=(
+		[template-api]="billing-api"
+	)
+
+	_gh_template_apply "$repo"
+
+	run cat "$repo/replace.txt"
+	[[ "$output" == "billing-api" ]]
+	run cat "$repo/keep.tmpl"
+	[[ "$output" == "template-api" ]]
+}
+
 @test "_gh_template_apply: no-op when config missing" {
 	local repo="$BATS_TEST_TMPDIR/repo"
 	_init_repo "$repo"
@@ -350,6 +381,89 @@ EOF
 	run _gh_template_apply_cmd ./a ./b
 	[[ "$status" -ne 0 ]]
 	[[ "$output" == *"unexpected"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# _gh_template_parse_ignore / _gh_template_path_ignored
+# ---------------------------------------------------------------------------
+
+@test "_gh_template_parse_ignore: emits each pattern on its own line" {
+	local cfg="$BATS_TEST_TMPDIR/template.yml"
+	mkdir -p "$(dirname "$cfg")"
+	cat >"$cfg" <<'EOF'
+variables: []
+ignore:
+  - "*.tmpl"
+  - "vendor/*"
+EOF
+	run _gh_template_parse_ignore "$cfg"
+	[[ "$status" -eq 0 ]]
+	[[ "$output" == *"*.tmpl"* ]]
+	[[ "$output" == *"vendor/*"* ]]
+}
+
+@test "_gh_template_parse_ignore: empty when no ignore key" {
+	local cfg="$BATS_TEST_TMPDIR/template.yml"
+	mkdir -p "$(dirname "$cfg")"
+	cat >"$cfg" <<'EOF'
+variables: []
+EOF
+	run _gh_template_parse_ignore "$cfg"
+	[[ "$status" -eq 0 ]]
+	[[ -z "$output" ]]
+}
+
+@test "_gh_template_path_ignored: basename pattern matches at any depth" {
+	run _gh_template_path_ignored "deep/nested/file.tmpl" "*.tmpl"
+	[[ "$status" -eq 0 ]]
+}
+
+@test "_gh_template_path_ignored: basename pattern does not match different extension" {
+	run _gh_template_path_ignored "deep/nested/file.go" "*.tmpl"
+	[[ "$status" -eq 1 ]]
+}
+
+@test "_gh_template_path_ignored: path pattern matches relative path" {
+	run _gh_template_path_ignored "vendor/lib/file.go" "vendor/*"
+	[[ "$status" -eq 0 ]]
+}
+
+@test "_gh_template_path_ignored: path pattern does not match outside its prefix" {
+	run _gh_template_path_ignored "src/lib/file.go" "vendor/*"
+	[[ "$status" -eq 1 ]]
+}
+
+@test "_gh_template_path_ignored: empty patterns never match" {
+	run _gh_template_path_ignored "anything" ""
+	[[ "$status" -eq 1 ]]
+}
+
+@test "_gh_template_substitute_content: skips files matching ignore globs" {
+	local root="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$root"
+	echo "template-api" >"$root/code.txt"
+	echo "template-api" >"$root/skip.tmpl"
+	local pairs=$'template-api\tbilling-api\tcontent'
+
+	_gh_template_substitute_content "$root" "$pairs" "" "*.tmpl"
+
+	run cat "$root/code.txt"
+	[[ "$output" == "billing-api" ]]
+	run cat "$root/skip.tmpl"
+	[[ "$output" == "template-api" ]]
+}
+
+@test "_gh_template_substitute_paths: skips paths matching ignore globs" {
+	local root="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$root"
+	touch "$root/template-api.go"
+	touch "$root/template-api.tmpl"
+	local pairs=$'template-api\tbilling-api\tpath'
+
+	_gh_template_substitute_paths "$root" "$pairs" "" "*.tmpl"
+
+	[[ -f "$root/billing-api.go" ]]
+	[[ -f "$root/template-api.tmpl" ]]
 }
 
 # ---------------------------------------------------------------------------

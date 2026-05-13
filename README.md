@@ -130,7 +130,14 @@ variables:
     name: template
     scope: [path, content]
     case: [camel, snake, kebab, pascal]
+
+# Optional. Glob patterns of files/dirs to leave untouched.
+ignore:
+  - "*.tmpl"
+  - "vendor/*"
 ```
+
+Each variable accepts:
 
 | Field   | Type     | Description                                                                                                                                                |
 | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -138,6 +145,13 @@ variables:
 | `text`  | string   | Prompt text shown to the user via `gum input`.                                                                                                             |
 | `case`  | string[] | Case variants to generate. Any [ccase](https://github.com/stringcase/ccase) target token is accepted — e.g. `camel`, `snake`, `kebab`, `pascal`, `title`. |
 | `scope` | string[] | Where substitutions apply. Supported: `path` (file/dir names), `content` (file contents).                                                                  |
+
+The top-level `ignore` array takes glob patterns. Patterns without `/` match
+the basename anywhere (e.g. `*.tmpl` matches any `.tmpl` file at any depth);
+patterns with `/` match the path relative to the repo root (e.g. `vendor/*`).
+Matching paths are skipped during both the content and path passes. Useful for
+files that legitimately contain the placeholder strings — runtime templates,
+test fixtures, vendored dependencies, etc.
 
 For each variable, `gh template` runs every case in `case` through `ccase`
 against both the `name` placeholder and the user-supplied value. Each

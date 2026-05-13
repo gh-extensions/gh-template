@@ -35,6 +35,43 @@ _gh_template_parse_config() {
 	yq '.variables[] | [.name, .text, ((.case // []) | join(",")), ((.scope // []) | join(","))] | @tsv' "$config"
 }
 
+# Parse the top-level ignore list from the template config.
+# Emits one glob pattern per line.
+#
+# Usage: _gh_template_parse_ignore <config_path>
+_gh_template_parse_ignore() {
+	local config="$1"
+	yq '(.ignore // []) | .[]' "$config"
+}
+
+# Check whether a relative path matches any ignore pattern.
+#
+# Patterns containing '/' are matched against the full relative path.
+# Patterns without '/' are matched against the basename only, so e.g.
+# "*.tmpl" matches any .tmpl file at any depth.
+#
+# Returns 0 if any pattern matches, 1 otherwise.
+#
+# Usage: _gh_template_path_ignored <rel_path> <patterns_newline_separated>
+_gh_template_path_ignored() {
+	local rel="$1"
+	local patterns="$2"
+	[[ -z "$patterns" ]] && return 1
+	local base pattern
+	base=$(basename "$rel")
+	while IFS= read -r pattern; do
+		[[ -z "$pattern" ]] && continue
+		if [[ "$pattern" == */* ]]; then
+			# shellcheck disable=SC2053 # intentional glob match on RHS
+			[[ "$rel" == $pattern ]] && return 0
+		else
+			# shellcheck disable=SC2053
+			[[ "$base" == $pattern ]] && return 0
+		fi
+	done <<<"$patterns"
+	return 1
+}
+
 # Emit case variants for a string given a comma-separated case list.
 #
 # Each line: <case_name>\t<value>
@@ -175,14 +212,17 @@ _is_binary_file() {
 #
 # Walks every regular non-symlink, non-binary file under <root> (excluding
 # .git/) and applies each replacement whose scope includes "content".
+# Files matching <ignore> patterns are skipped entirely.
 #
-# Usage: _gh_template_substitute_content <root> <pairs_input> [<dry_run>]
+# Usage: _gh_template_substitute_content <root> <pairs_input> [<dry_run>] [<ignore>]
 #   pairs_input: newline-separated "<from>\t<to>\t<scopes_csv>" rows
 #   dry_run: non-empty string enables dry-run mode (print only)
+#   ignore: newline-separated glob patterns to skip
 _gh_template_substitute_content() {
 	local root="$1"
 	local pairs_input="$2"
 	local dry_run="${3:-}"
+	local ignore="${4:-}"
 
 	local -a froms=() tos=()
 	local from to scopes
@@ -195,10 +235,15 @@ _gh_template_substitute_content() {
 
 	[[ ${#froms[@]} -eq 0 ]] && return 0
 
-	local f i
+	local f i rel
 	while IFS= read -r -d '' f; do
 		[[ -L "$f" ]] && continue
 		_is_binary_file "$f" && continue
+		rel="${f#"$root"/}"
+		if _gh_template_path_ignored "$rel" "$ignore"; then
+			[[ -n "$dry_run" ]] && printf 'content: ignored %s\n' "$f"
+			continue
+		fi
 		for i in "${!froms[@]}"; do
 			from="${froms[$i]}"
 			to="${tos[$i]}"
@@ -216,21 +261,27 @@ _gh_template_substitute_content() {
 # Substitute file and directory names in the repo.
 #
 # Uses find -depth so deeper paths are renamed first, preventing parent
-# rename from invalidating child paths.
+# rename from invalidating child paths. Paths matching <ignore> patterns
+# are skipped.
 #
-# Usage: _gh_template_substitute_paths <root> <pairs_input> [<dry_run>]
+# Usage: _gh_template_substitute_paths <root> <pairs_input> [<dry_run>] [<ignore>]
 _gh_template_substitute_paths() {
 	local root="$1"
 	local pairs_input="$2"
 	local dry_run="${3:-}"
+	local ignore="${4:-}"
 
 	local from to scopes
 	while IFS=$'\t' read -r from to scopes; do
 		[[ -z "$from" ]] && continue
 		[[ ",$scopes," == *,path,* ]] || continue
 
-		local p base dir new
+		local p base dir new rel
 		while IFS= read -r -d '' p; do
+			rel="${p#"$root"/}"
+			if _gh_template_path_ignored "$rel" "$ignore"; then
+				continue
+			fi
 			base=$(basename "$p")
 			dir=$(dirname "$p")
 			new="${base//${from}/${to}}"
@@ -249,11 +300,12 @@ _gh_template_substitute_paths() {
 # replacement list, then perform content + path substitution. Wrapped in
 # `gum spin` by _gh_template_apply so the user sees progress.
 #
-# Usage: _gh_template_run_substitution <repo_dir> <config_path> <values>
+# Usage: _gh_template_run_substitution <repo_dir> <config_path> <values> <ignore>
 _gh_template_run_substitution() {
 	local repo_dir="$1"
 	local config_path="$2"
 	local values="$3"
+	local ignore="$4"
 
 	local replacements
 	replacements=$(_gh_template_build_replacements "$config_path" "$values")
@@ -261,8 +313,8 @@ _gh_template_run_substitution() {
 		return 0
 	fi
 
-	_gh_template_substitute_content "$repo_dir" "$replacements"
-	_gh_template_substitute_paths "$repo_dir" "$replacements"
+	_gh_template_substitute_content "$repo_dir" "$replacements" "" "$ignore"
+	_gh_template_substitute_paths "$repo_dir" "$replacements" "" "$ignore"
 }
 
 # Apply template substitutions to a directory.
@@ -286,6 +338,9 @@ _gh_template_apply() {
 	local values
 	values=$(_gh_template_prompt_variables "$config_path") || return 1
 
+	local ignore
+	ignore=$(_gh_template_parse_ignore "$config_path")
+
 	if [[ -n "$dry_run" ]]; then
 		gum log --level info "Dry run — no changes will be made"
 		local replacements
@@ -294,14 +349,14 @@ _gh_template_apply() {
 			gum log --level warn "no replacements computed"
 			return 0
 		fi
-		_gh_template_substitute_content "$repo_dir" "$replacements" "$dry_run"
-		_gh_template_substitute_paths "$repo_dir" "$replacements" "$dry_run"
+		_gh_template_substitute_content "$repo_dir" "$replacements" "$dry_run" "$ignore"
+		_gh_template_substitute_paths "$repo_dir" "$replacements" "$dry_run" "$ignore"
 		printf 'config: would remove %s\n' "$config_path"
 		return 0
 	fi
 
 	_gh_template_spin "Substituting template variables..." \
-		_gh_template_run_substitution "$repo_dir" "$config_path" "$values"
+		_gh_template_run_substitution "$repo_dir" "$config_path" "$values" "$ignore"
 
 	rm -f "$config_path"
 
