@@ -136,10 +136,10 @@ Example for `name: template-api`, user input `billing api`, all four cases:
 
 | Case          | Placeholder    | Replacement   |
 | ------------- | -------------- | ------------- |
-| `kebab_case`  | `template-api` | `billing-api` |
-| `snake_case`  | `template_api` | `billing_api` |
-| `pascal_case` | `TemplateApi`  | `BillingApi`  |
-| `camel_case`  | `templateApi`  | `billingApi`  |
+| `kebab`  | `template-api` | `billing-api` |
+| `snake`  | `template_api` | `billing_api` |
+| `pascal` | `TemplateApi`  | `BillingApi`  |
+| `camel`  | `templateApi`  | `billingApi`  |
 
 Both placeholders and values are normalized through `ccase`. `TemplateAPI`
 written in a template file will not match — use `TemplateApi` (the pascal-case
