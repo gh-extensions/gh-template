@@ -1,0 +1,13 @@
+variables:
+  - text: "What is the organization name?"
+    name: template-org
+    case: [camel, snake, kebab, pascal]
+    scope: [path, content]
+  - text: "What is the repository name?"
+    name: template-api
+    scope: [path, content]
+    case: [camel, snake, kebab, pascal]
+  - text: "What is the service name?"
+    name: template
+    scope: [path, content]
+    case: [camel, snake, kebab, pascal]
