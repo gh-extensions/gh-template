@@ -9,6 +9,12 @@ set -euo pipefail
 _GH_TEMPLATE_SCRIPT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
 export _GH_TEMPLATE_SCRIPT
 
+# Absolute path to the perl substitution script used by
+# _gh_template_substitute_content. Resolved alongside this script so the
+# extension is portable wherever it's installed.
+_GH_TEMPLATE_PERL_SCRIPT=$(dirname -- "$_GH_TEMPLATE_SCRIPT")/gh_template.pl
+export _GH_TEMPLATE_PERL_SCRIPT
+
 # Run a function inside `gum spin` so the user sees a progress spinner
 # while a long-running step (clone, substitution) executes.
 #
@@ -242,7 +248,19 @@ _gh_template_substitute_content() {
 
 	[[ ${#froms[@]} -eq 0 ]] && return 0
 
-	local f i rel
+	# Write the ordered (from, to) pairs to a temp file once. perl reads
+	# them in BEGIN, so each file gets exactly one perl invocation that
+	# applies every substitution in order — vs. forking perl once per
+	# (file, pair), which is the difference between ~2s and ~20s on a
+	# ~200-file repo.
+	local pairs_file
+	pairs_file=$(mktemp)
+	local i
+	for i in "${!froms[@]}"; do
+		printf '%s\t%s\n' "${froms[$i]}" "${tos[$i]}"
+	done >"$pairs_file"
+
+	local f rel
 	while IFS= read -r -d '' f; do
 		[[ -L "$f" ]] && continue
 		_is_binary_file "$f" && continue
@@ -251,18 +269,20 @@ _gh_template_substitute_content() {
 			[[ -n "$dry_run" ]] && printf 'content: ignored %s\n' "$f"
 			continue
 		fi
-		for i in "${!froms[@]}"; do
-			from="${froms[$i]}"
-			to="${tos[$i]}"
-			if [[ -n "$dry_run" ]]; then
+		if [[ -n "$dry_run" ]]; then
+			for i in "${!froms[@]}"; do
+				from="${froms[$i]}"
+				to="${tos[$i]}"
 				if grep -qF -- "$from" "$f" 2>/dev/null; then
 					printf 'content: %s : %s -> %s\n' "$f" "$from" "$to"
 				fi
-			else
-				perl -i -pe 'BEGIN{$f=shift @ARGV;$t=shift @ARGV} s/\Q$f\E/$t/g' "$from" "$to" "$f"
-			fi
-		done
+			done
+		else
+			PAIRS_FILE="$pairs_file" perl -i -p "$_GH_TEMPLATE_PERL_SCRIPT" "$f"
+		fi
 	done < <(find "$root" -type f -not -path "*/.git" -not -path "*/.git/*" -print0)
+
+	rm -f "$pairs_file"
 }
 
 # Substitute file and directory names in the repo.

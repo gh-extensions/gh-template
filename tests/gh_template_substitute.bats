@@ -9,6 +9,8 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_DIRNAME")" && pwd)"
 
 setup() {
 	export HOME="$BATS_TEST_TMPDIR"
+	export _GH_TEMPLATE_SCRIPT="$REPO_ROOT/scripts/gh_template.sh"
+	export _GH_TEMPLATE_PERL_SCRIPT="$REPO_ROOT/scripts/gh_template.pl"
 
 	gum() { if [[ "$1" == "log" ]]; then shift; shift; shift; echo "$@"; fi; }
 	export -f gum
@@ -17,7 +19,7 @@ setup() {
 	eval "$(
 		# shellcheck source=../scripts/gh_template.sh
 		source "$REPO_ROOT/scripts/gh_template.sh"
-		declare -f _gh_template_case_variants \
+		declare -f _gh_template_case_variants _gh_template_path_ignored \
 			_gh_template_substitute_content _gh_template_substitute_paths \
 			_is_binary_file
 	)"

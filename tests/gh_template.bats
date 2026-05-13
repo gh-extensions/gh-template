@@ -10,6 +10,7 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_DIRNAME")" && pwd)"
 setup() {
 	export HOME="$BATS_TEST_TMPDIR"
 	export _GH_TEMPLATE_SCRIPT="$REPO_ROOT/scripts/gh_template.sh"
+	export _GH_TEMPLATE_PERL_SCRIPT="$REPO_ROOT/scripts/gh_template.pl"
 
 	gum() {
 		case "$1" in
