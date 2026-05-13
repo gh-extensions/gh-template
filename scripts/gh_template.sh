@@ -275,12 +275,15 @@ _gh_template_apply() {
 	gum log --level info "Committed: $msg"
 }
 
-# Clone a template source into <dir>.
+# Populate <dir> with the contents of a template source.
 #
 # Source may be either:
-#   - "owner/repo"     — cloned via `gh repo clone`
+#   - "owner/repo"     — fetched via `gh repo clone`
 #   - a local path     — cloned via `git clone` if it's a git repo,
 #                        otherwise copied with `cp -R`
+#
+# The source's contents are placed directly inside <dir>; no extra
+# subdirectory is created. <dir> must be empty (or not exist yet).
 #
 # Detects local paths by a leading `./`, `../`, `/`, or `~`.
 #
@@ -299,7 +302,8 @@ _gh_template_clone_source() {
 		if git -C "$expanded" rev-parse --git-dir >/dev/null 2>&1; then
 			git clone --quiet "$expanded" "$dir"
 		else
-			cp -R "$expanded" "$dir"
+			mkdir -p "$dir"
+			cp -R "$expanded"/. "$dir"/
 		fi
 		;;
 	*/*)
@@ -327,25 +331,24 @@ DESCRIPTION:
     performs case-aware substitution across file contents and paths,
     deletes the config file, and creates a single commit.
 
-    When --source is given, the source repo (a GitHub repo "owner/repo"
-    or a local directory) is cloned into DIR first (default: the source's
-    basename) and the substitution is applied there.
+    DIR defaults to the current working directory. When --source is given,
+    the source's contents are placed directly inside DIR (no extra
+    subdirectory is created); DIR must be empty (or not exist yet).
 
 FLAGS:
-    --source <repo|path> Clone the given GitHub repo or local path into DIR
-                         before applying. Refuses to overwrite a non-empty
-                         DIR unless --force is also passed.
+    --source <repo|path> Populate DIR with the contents of the given GitHub
+                         repo or local path before applying.
     --config <path>      Use a different config file (default: .github/template.yml)
     --var name=value     Provide variable values non-interactively (repeatable)
     --dry-run            Print planned changes without modifying anything
-    --force              Run on a dirty tree, or clone into a non-empty DIR
+    --force              Run on a dirty tree (no-source mode only)
 
 EXAMPLES:
     gh template apply
     gh template apply ./my-svc
-    gh template apply --source acme/sample-template
+    mkdir my-svc && cd my-svc && gh template apply --source acme/sample-template
     gh template apply --source acme/sample-template ./my-svc --var template-org=acme
-    gh template apply --source ./local/template --dry-run
+    gh template apply --source ./local/template ./my-svc --dry-run
 EOF
 }
 
@@ -416,12 +419,11 @@ _gh_template_apply_cmd() {
 		shift
 	done
 
+	target_dir="${target_dir:-$(pwd)}"
+
 	if [[ -n "$source" ]]; then
-		if [[ -z "$target_dir" ]]; then
-			target_dir=$(basename "$source")
-		fi
-		if [[ -e "$target_dir" && -n "$(ls -A "$target_dir" 2>/dev/null)" && -z "$force" ]]; then
-			gum log --level error "target '$target_dir' exists and is not empty — use --force to overwrite"
+		if [[ -d "$target_dir" && -n "$(ls -A "$target_dir" 2>/dev/null)" ]]; then
+			gum log --level error "target '$target_dir' is not empty — pick an empty directory"
 			return 1
 		fi
 		gum log --level info "Cloning '$source' into '$target_dir'..."
@@ -430,7 +432,6 @@ _gh_template_apply_cmd() {
 		fi
 		_gh_template_commit_msg="chore: apply template from $source"
 	else
-		target_dir="${target_dir:-$(pwd)}"
 		if [[ ! -d "$target_dir" ]]; then
 			gum log --level error "directory not found: $target_dir"
 			return 1

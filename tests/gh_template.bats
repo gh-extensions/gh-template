@@ -326,14 +326,32 @@ EOF
 
 @test "_gh_template_clone_source: copies a non-git local directory" {
 	local src="$BATS_TEST_TMPDIR/plain"
-	mkdir -p "$src"
+	mkdir -p "$src/nested"
 	echo "hello" >"$src/file.txt"
+	echo "deep" >"$src/nested/inner.txt"
 
 	local dst="$BATS_TEST_TMPDIR/dst"
 	_gh_template_clone_source "$src" "$dst"
 
+	# Contents land directly in $dst, not in $dst/plain
 	[[ -f "$dst/file.txt" ]]
+	[[ -f "$dst/nested/inner.txt" ]]
+	[[ ! -d "$dst/plain" ]]
 	[[ ! -d "$dst/.git" ]]
+}
+
+@test "_gh_template_clone_source: copies a non-git source into a pre-existing empty dir" {
+	local src="$BATS_TEST_TMPDIR/plain"
+	mkdir -p "$src"
+	echo "hello" >"$src/file.txt"
+
+	local dst="$BATS_TEST_TMPDIR/dst"
+	mkdir -p "$dst"
+
+	_gh_template_clone_source "$src" "$dst"
+
+	[[ -f "$dst/file.txt" ]]
+	[[ ! -d "$dst/plain" ]]
 }
 
 @test "_gh_template_clone_source: errors on nonexistent local path" {
@@ -383,7 +401,7 @@ EOF
 	[[ "$msg" == *"apply template from"* ]]
 }
 
-@test "_gh_template_apply_cmd: --source refuses non-empty existing target without --force" {
+@test "_gh_template_apply_cmd: --source refuses non-empty existing target" {
 	local src="$BATS_TEST_TMPDIR/src"
 	_init_repo "$src"
 	_make_config "$src/.github/template.yml"
@@ -397,4 +415,28 @@ EOF
 	run _gh_template_apply_cmd --source "$src" ./dst
 	[[ "$status" -ne 0 ]]
 	[[ "$output" == *"not empty"* ]]
+}
+
+@test "_gh_template_apply_cmd: --source with no DIR defaults to CWD" {
+	local src="$BATS_TEST_TMPDIR/src"
+	_init_repo "$src"
+	_make_config "$src/.github/template.yml"
+	echo "template-api" >"$src/code.txt"
+	git -C "$src" add -A
+	git -C "$src" commit -q -m "initial"
+
+	mkdir -p "$BATS_TEST_TMPDIR/work"
+	cd "$BATS_TEST_TMPDIR/work"
+
+	_gh_template_apply_cmd --source "$src" \
+		--var template-org=acme \
+		--var template-api='billing api' \
+		--var template=billing
+
+	# Contents in CWD, no subdirectory
+	[[ -f "./code.txt" ]]
+	[[ ! -d "./src" ]]
+	[[ ! -f "./.github/template.yml" ]]
+	run cat ./code.txt
+	[[ "$output" == "billing-api" ]]
 }

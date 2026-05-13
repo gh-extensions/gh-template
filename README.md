@@ -73,16 +73,18 @@ is a no-op (exit 0) when `.github/template.yml` is already gone.
 
 ### Apply from a source
 
-With `--source`, `gh template` first clones the source — either a GitHub repo
-(`owner/repo`) or a local path — into `DIR`, then applies the substitution
-there. If `DIR` is omitted it defaults to the basename of the source.
+With `--source`, `gh template` populates `DIR` with the contents of the source
+— either a GitHub repo (`owner/repo`) or a local path — and then applies the
+substitution there. The source's files land directly inside `DIR`; no extra
+subdirectory is created. `DIR` defaults to the current working directory, and
+must be empty (or not exist yet) when `--source` is used.
 
 ```bash
-# Clone acme/sample-template and apply the substitutions
-gh template apply --source acme/sample-template
-
-# Pick the target directory explicitly
+# Apply into an empty target directory
 gh template apply --source acme/sample-template ./my-svc
+
+# Or from inside an empty directory
+mkdir my-svc && cd my-svc && gh template apply --source acme/sample-template
 
 # Apply from a local template (handy for offline iteration)
 gh template apply --source ./local/template ./my-svc
@@ -92,8 +94,7 @@ gh template apply --source acme/sample-template ./my-svc \
   --var template-org=acme --var template-api='billing api' --var template=billing
 ```
 
-`--source` refuses to overwrite a non-empty `DIR` unless `--force` is also
-passed. Publishing the result to GitHub is a separate step:
+Publishing the result to GitHub is a separate step:
 
 ```bash
 gh template apply --source acme/sample-template ./my-svc
