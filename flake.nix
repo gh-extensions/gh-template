@@ -38,7 +38,6 @@
             bash
             gh
             gum
-            jq
             yq-go
             bats
             shellcheck

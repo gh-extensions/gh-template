@@ -18,7 +18,6 @@ deleted and the result is committed and pushed in one go.
 - [GitHub CLI](https://cli.github.com/) (`gh`)
 - [Bash](https://www.gnu.org/software/bash/) 4.4+ (`bash`)
 - [Gum](https://github.com/charmbracelet/gum) (`gum`)
-- [jq](https://jqlang.github.io/jq/) (`jq`)
 - [yq](https://github.com/mikefarah/yq) (`yq` — mikefarah's Go implementation)
 - [ccase](https://github.com/stringcase/ccase) (`ccase`)
 - `perl`, `file`, `git`
@@ -32,7 +31,7 @@ nix develop
 **macOS (Homebrew):**
 
 ```bash
-brew install gh bash gum jq yq
+brew install gh bash gum yq
 cargo install ccase
 ```
 
@@ -137,7 +136,7 @@ overlapping ones (`template`).
 ## How it works
 
 1. `gh repo create --template --clone` creates and clones the new repo.
-2. `.github/template.yml` is parsed via `yq | jq`.
+2. `.github/template.yml` is parsed via `yq`.
 3. Each variable is prompted via `gum input` (or supplied via `--var`).
 4. `ccase` generates every requested case variant of the placeholder and the
    user-supplied value.

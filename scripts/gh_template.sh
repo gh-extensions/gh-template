@@ -11,8 +11,7 @@ set -euo pipefail
 # Usage: _gh_template_parse_config <config_path>
 _gh_template_parse_config() {
 	local config="$1"
-	yq -o=json '.variables' "$config" \
-		| jq -r '.[] | [.name, .text, ((.case // []) | join(",")), ((.scope // []) | join(","))] | @tsv'
+	yq '.variables[] | [.name, .text, ((.case // []) | join(",")), ((.scope // []) | join(","))] | @tsv' "$config"
 }
 
 # Emit case variants for a string given a comma-separated case list.

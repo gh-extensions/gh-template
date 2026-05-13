@@ -25,9 +25,6 @@ _check_dependencies() {
 	if ! command -v gum &>/dev/null; then
 		missing+=("gum   — https://github.com/charmbracelet/gum")
 	fi
-	if ! command -v jq &>/dev/null; then
-		missing+=("jq    — https://jqlang.github.io/jq")
-	fi
 	if ! command -v yq &>/dev/null; then
 		missing+=("yq    — https://github.com/mikefarah/yq")
 	fi
