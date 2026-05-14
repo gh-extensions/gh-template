@@ -4,15 +4,16 @@
 
 set -euo pipefail
 
-# Absolute path to this script, exported so that subprocesses spawned by
-# `gum spin` can re-source it and invoke functions from this file.
-_GH_TEMPLATE_SCRIPT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
-export _GH_TEMPLATE_SCRIPT
+# The directory containing this script. Resolved once so paths derived
+# from it (the script itself, the companion perl script) don't repeat
+# the dirname/basename dance.
+_GH_TEMPLATE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+export _GH_TEMPLATE_DIR
 
 # Absolute path to the perl substitution script used by
 # _gh_template_substitute_content. Resolved alongside this script so the
 # extension is portable wherever it's installed.
-_GH_TEMPLATE_PERL_SCRIPT=$(dirname -- "$_GH_TEMPLATE_SCRIPT")/gh_template.pl
+_GH_TEMPLATE_PERL_SCRIPT="$_GH_TEMPLATE_DIR/gh_template.pl"
 export _GH_TEMPLATE_PERL_SCRIPT
 
 # Run a function inside `gum spin` so the user sees a progress spinner
@@ -20,7 +21,7 @@ export _GH_TEMPLATE_PERL_SCRIPT
 #
 # gum spin invokes its command in a separate process, so we spawn a
 # fresh bash that re-sources this script before invoking the named
-# function. _GH_TEMPLATE_SCRIPT is inherited via env.
+# function. _GH_TEMPLATE_DIR is inherited via env.
 #
 # Usage: _gh_template_spin <title> <function-name> [args...]
 _gh_template_spin() {
@@ -35,7 +36,7 @@ _gh_template_spin() {
 	fi
 	# shellcheck disable=SC2016 # intentional: vars expand in the spawned bash
 	gum spin --show-error --title "$title" -- \
-		bash -c 'set -euo pipefail; source "$_GH_TEMPLATE_SCRIPT"; "$@"' bash "$@"
+		bash -c 'set -euo pipefail; source "$_GH_TEMPLATE_DIR/gh_template.sh"; "$@"' bash "$@"
 }
 
 # Parse the template config into TSV rows.
