@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/gh-extensions/gh-template/compare/v0.2.0...v0.2.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* **tests:** export _GH_TEMPLATE_DIR in bats setup ([cd4c1a3](https://github.com/gh-extensions/gh-template/commit/cd4c1a3f0d7124146ad505f18109cc359968c77b))
+
 ## [0.2.0](https://github.com/gh-extensions/gh-template/compare/v0.1.0...v0.2.0) (2026-05-13)
 
 
