@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/gh-extensions/gh-template/compare/v0.2.1...v0.3.0) (2026-06-25)
+
+
+### Features
+
+* expand slash values into nested directories during path substitution ([8e2095d](https://github.com/gh-extensions/gh-template/commit/8e2095debc45ca626761eeecddb7cd380221a7e0))
+
 ## [0.2.1](https://github.com/gh-extensions/gh-template/compare/v0.2.0...v0.2.1) (2026-05-15)
 
 
