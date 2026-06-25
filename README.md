@@ -173,6 +173,52 @@ Replacements are applied in **descending order of placeholder length**, so
 longer placeholders (`template-api`) are never partially consumed by shorter
 overlapping ones (`template`).
 
+### Hierarchical (slash-bearing) values
+
+A value may contain `/`. During the **path pass** the placeholder component is
+expanded into nested directories (the intermediate parents are created), so a
+single template directory can fan out into a deeper tree:
+
+```text
+proto/org/template/v1/        --var template=billing/invoice
+        ↓
+proto/org/billing/invoice/v1/
+```
+
+This is the right tool for hierarchical proto package paths
+(`google/spanner/admin/database/v1` style), where the directory layout mirrors
+the dotted package name.
+
+**Caveat — a slash value is a path, not an identifier.** The same `/`-bearing
+value is *also* pasted into file contents wherever the placeholder appears, and
+`billing/invoice` is not a valid Go/Java/etc. identifier. A blind
+find-and-replace cannot tell an import-path string from a package selector —
+both are just text — so it cannot give them different forms.
+
+The fix is to model the two roles as **two variables**, mirroring how code
+generators actually work (the import path is the *full* hierarchy; the package
+name is the *last* segment):
+
+```yaml
+variables:
+  # Full hierarchy — used in directory names, import-path strings, and the
+  # dotted proto package. Slash-bearing.
+  - text: "Proto package path?"
+    name: template-pkg-path        # e.g. billing/invoice
+    scope: [path, content]
+    case: [kebab]
+  # Last segment only — used as the Go package alias / selector. Slash-free,
+  # so it stays a valid identifier.
+  - text: "Proto package name?"
+    name: templatepkg              # e.g. invoice  ->  invoicev1
+    scope: [content]
+    case: [camel, snake, kebab, pascal]
+```
+
+Author the source so the import path uses `template-pkg-path` and the alias
+uses `templatepkg` (e.g. `templatepkgv1`); they then never collide. Keep
+slash values out of any single-token identifier context.
+
 ## How it works
 
 1. If `--source` is given, the source is cloned (via `gh repo clone` for a
@@ -187,7 +233,9 @@ overlapping ones (`template`).
    treated as a literal string, not a regex).
 7. **Path pass** — `find -depth` walks deepest-first so parent renames don't
    invalidate child paths; `mv` is used to apply the same substitution to file
-   and directory names.
+   and directory names. When a value contains `/`, the intermediate parent
+   directories are created first so a single component can expand into a nested
+   tree.
 8. `.github/template.yml` is removed and the working tree is left dirty for
    the user to review with `git diff` and commit however they prefer.
 
@@ -201,6 +249,9 @@ overlapping ones (`template`).
   renamed during the path pass but its target is left untouched.
 - macOS filename normalization (NFC vs NFD) is not handled — stick to ASCII
   placeholders.
+- A `/`-bearing value is treated as a literal everywhere it matches. It is
+  correct for paths and import-path strings but invalid in single-token
+  identifier contexts — see [Hierarchical (slash-bearing) values](#hierarchical-slash-bearing-values).
 
 ## The gh-extensions Ecosystem
 
