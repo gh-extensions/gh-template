@@ -317,6 +317,12 @@ _gh_template_substitute_paths() {
 				if [[ -n "$dry_run" ]]; then
 					printf 'path: %s -> %s/%s\n' "$p" "$dir" "$new"
 				else
+					# A value may contain '/' (e.g. a multi-segment proto
+					# package path like copaycoupon/enrollment), expanding a
+					# single component into nested directories. mv won't create
+					# the intermediate parents, so do it first. When $new has no
+					# '/', dirname returns $dir, which already exists (no-op).
+					mkdir -p -- "$(dirname -- "$dir/$new")"
 					mv -- "$p" "$dir/$new"
 				fi
 			fi

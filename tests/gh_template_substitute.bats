@@ -184,6 +184,19 @@ template_api\tbilling_api\tpath'
 	[[ -f "$root/src/billing-api/billing_api.go" ]]
 }
 
+@test "_gh_template_substitute_paths: expands a slash value into nested dirs" {
+	local root="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$root/proto/hippo/template/v1"
+	touch "$root/proto/hippo/template/v1/api.proto"
+	local pairs=$'template\tcopaycoupon/enrollment\tpath'
+
+	_gh_template_substitute_paths "$root" "$pairs"
+
+	[[ -d "$root/proto/hippo/copaycoupon/enrollment/v1" ]]
+	[[ -f "$root/proto/hippo/copaycoupon/enrollment/v1/api.proto" ]]
+	[[ ! -e "$root/proto/hippo/template" ]]
+}
+
 @test "_gh_template_substitute_paths: no-op when 'from' absent" {
 	local root="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$root/src"
