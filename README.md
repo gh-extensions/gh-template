@@ -156,7 +156,9 @@ for real names that contain a placeholder: with `template` as a placeholder,
 `keep: [sqlc-gen-template]` renames `template` but leaves the tool
 `sqlc-gen-template` alone. Each kept string is masked before the substitutions
 run and restored after, longest first, so a kept string also shields any longer
-placeholder inside it.
+placeholder inside it. A kept string counts only as a whole word, not directly
+after or before a letter, digit or underscore: keeping `gh template` does not
+shield the `template-api` in `through template-api`.
 
 The top-level `ignore` array takes glob patterns. Patterns without `/` match
 the basename anywhere (e.g. `*.tmpl` matches any `.tmpl` file at any depth);

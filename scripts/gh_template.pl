@@ -16,7 +16,10 @@
 # KEEP_FILE, when set, names a file of literal strings, one per line, that
 # no substitution may touch: each is masked before the substitutions run
 # and restored after, so `template` is replaced but `sqlc-gen-template`
-# is not. The masks are control characters, which no placeholder holds.
+# is not. A kept string counts only as a whole word -- not directly after
+# or before a letter, digit or underscore -- so keeping `gh template` does
+# not shield the `template-api` in `through template-api`. The masks are
+# control characters, which no placeholder holds.
 #
 # With REPORT set, the script is run as `perl -n` instead: it rewrites
 # nothing, and prints each (from, to) pair that would change the file,
@@ -56,7 +59,7 @@ BEGIN {
 
 my @held;
 for my $k (@KEEP) {
-    s/\Q$k\E/push @held, $k; "\x00" . ("\x01" x scalar @held) . "\x00"/ge;
+    s/(?<![A-Za-z0-9_])\Q$k\E(?![A-Za-z0-9_])/push @held, $k; "\x00" . ("\x01" x scalar @held) . "\x00"/ge;
 }
 
 for my $i (0 .. $#PAIRS) {

@@ -68,8 +68,7 @@ _gh_template_parse_keep() {
 }
 
 # Replace every <from> in <text> with <to>, leaving each <keep> string as it
-# is: kept strings are masked first, longest first, and restored after.
-# Every string is literal, never a glob.
+# is -- by the same perl script, and so by the same rules, as file contents.
 #
 # Usage: _gh_template_replace_keeping <text> <from> <to> [<keep_newline_separated>]
 _gh_template_replace_keeping() {
@@ -78,26 +77,16 @@ _gh_template_replace_keeping() {
 	local to="$3"
 	local keep="${4:-}"
 
-	local -a held=()
-	local k mask i
-	while IFS= read -r k; do
-		[[ -z "$k" ]] && continue
-		held+=("$k")
-	done < <(printf '%s\n' "$keep" | awk '{ print length($0) "\t" $0 }' | sort -t$'\t' -k1,1nr | cut -f2-)
+	local pairs_file keep_file out
+	pairs_file=$(mktemp)
+	keep_file=$(mktemp)
+	printf '%s\t%s\n' "$from" "$to" >"$pairs_file"
+	printf '%s\n' "$keep" >"$keep_file"
+	out=$(printf '%s\n' "$text" | PAIRS_FILE="$pairs_file" KEEP_FILE="$keep_file" \
+		perl -p "$_GH_TEMPLATE_PERL_SCRIPT")
+	rm -f "$pairs_file" "$keep_file"
 
-	# Control characters, which no placeholder holds: \x1f, then one \x1e
-	# per index, then \x1f.
-	for i in "${!held[@]}"; do
-		mask=$'\x1f'$(printf '\x1e%.0s' $(seq 0 "$i"))$'\x1f'
-		text="${text//"${held[$i]}"/"$mask"}"
-	done
-	text="${text//"$from"/"$to"}"
-	for i in "${!held[@]}"; do
-		mask=$'\x1f'$(printf '\x1e%.0s' $(seq 0 "$i"))$'\x1f'
-		text="${text//"$mask"/"${held[$i]}"}"
-	done
-
-	printf '%s' "$text"
+	printf '%s' "$out"
 }
 
 # Check whether a relative path matches any ignore pattern.

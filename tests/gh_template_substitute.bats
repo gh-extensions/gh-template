@@ -193,6 +193,19 @@ template\tbilling\tcontent'
 	[[ "$output" == "grpc-go-template billing-api" ]]
 }
 
+@test "_gh_template_substitute_content: a kept string counts only as a whole word" {
+	local root="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$root"
+	echo "run gh template, through template-api" >"$root/code.txt"
+	local pairs=$'template-api\tbilling-api\tcontent
+template\tbilling\tcontent'
+
+	_gh_template_substitute_content "$root" "$pairs" "" "" "gh template"
+
+	run cat "$root/code.txt"
+	[[ "$output" == "run gh template, through billing-api" ]]
+}
+
 @test "_gh_template_substitute_content: dry-run does not report a match only inside a kept string" {
 	local root="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$root"
@@ -220,6 +233,11 @@ template\tbilling\tcontent'
 @test "_gh_template_replace_keeping: masks the longer of two overlapping kept strings first" {
 	run _gh_template_replace_keeping "gen-template-x gen-template template" "template" "billing" $'gen-template\ngen-template-x'
 	[[ "$output" == "gen-template-x gen-template billing" ]]
+}
+
+@test "_gh_template_replace_keeping: a kept string inside a longer word is not kept" {
+	run _gh_template_replace_keeping "through template-api" "template-api" "billing-api" "gh template"
+	[[ "$output" == "through billing-api" ]]
 }
 
 @test "_gh_template_replace_keeping: treats glob characters literally" {
