@@ -17,9 +17,21 @@ jobs:
       pull-requests: write
     timeout-minutes: 5
     steps:
+      # The App's token, not github.token: GitHub runs no workflow for a push
+      # made with github.token, so a merge by it ran no CI on main -- and no
+      # release job, which left a merged release PR untagged. A workflow run
+      # for a Dependabot PR gets no Actions secrets, so there it falls back to
+      # github.token, merging as before.
+      - name: Generate App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Enable auto-merge
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           gh pr review --approve "$PR_URL" || echo "PR approval skipped or failed."
