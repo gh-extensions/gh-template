@@ -135,6 +135,10 @@ variables:
 ignore:
   - "*.tmpl"
   - "vendor/*"
+
+# Optional. Literal strings no substitution may touch, anywhere.
+keep:
+  - sqlc-gen-template
 ```
 
 Each variable accepts:
@@ -145,6 +149,14 @@ Each variable accepts:
 | `text`  | string   | Prompt text shown to the user via `gum input`.                                                                                                             |
 | `case`  | string[] | Case variants to generate. Any [ccase](https://github.com/stringcase/ccase) target token is accepted — e.g. `camel`, `snake`, `kebab`, `pascal`, `title`. |
 | `scope` | string[] | Where substitutions apply. Supported: `path` (file/dir names), `content` (file contents).                                                                  |
+
+The top-level `keep` array takes literal strings that are never substituted,
+in contents or in paths, even inside a file that is otherwise rewritten. Use it
+for real names that contain a placeholder: with `template` as a placeholder,
+`keep: [sqlc-gen-template]` renames `template` but leaves the tool
+`sqlc-gen-template` alone. Each kept string is masked before the substitutions
+run and restored after, longest first, so a kept string also shields any longer
+placeholder inside it.
 
 The top-level `ignore` array takes glob patterns. Patterns without `/` match
 the basename anywhere (e.g. `*.tmpl` matches any `.tmpl` file at any depth);
@@ -230,14 +242,18 @@ slash values out of any single-token identifier context.
 5. Replacements are sorted by descending placeholder length.
 6. **Content pass** — every regular non-symlink, non-binary file outside
    `.git/` is rewritten with `perl -i -pe` (using `\Q…\E` so the placeholder is
-   treated as a literal string, not a regex).
+   treated as a literal string, not a regex). Strings in `keep` are masked
+   first and restored after.
 7. **Path pass** — `find -depth` walks deepest-first so parent renames don't
    invalidate child paths; `mv` is used to apply the same substitution to file
    and directory names. When a value contains `/`, the intermediate parent
    directories are created first so a single component can expand into a nested
    tree.
 8. `.github/template.yml` is removed and the working tree is left dirty for
-   the user to review with `git diff` and commit however they prefer.
+   the user to review with `git diff` and commit however they prefer. It is
+   moved out of the tree before the passes run, so it is never rewritten, or
+   renamed when its own name holds a placeholder, as `template.yml` holds
+   `template`.
 
 ## Limitations
 

@@ -58,6 +58,48 @@ _gh_template_parse_ignore() {
 	yq '(.ignore // []) | .[]' "$config"
 }
 
+# Parse the top-level keep list from the template config: literal strings
+# no substitution may touch. Emits one string per line.
+#
+# Usage: _gh_template_parse_keep <config_path>
+_gh_template_parse_keep() {
+	local config="$1"
+	yq '(.keep // []) | .[]' "$config"
+}
+
+# Replace every <from> in <text> with <to>, leaving each <keep> string as it
+# is: kept strings are masked first, longest first, and restored after.
+# Every string is literal, never a glob.
+#
+# Usage: _gh_template_replace_keeping <text> <from> <to> [<keep_newline_separated>]
+_gh_template_replace_keeping() {
+	local text="$1"
+	local from="$2"
+	local to="$3"
+	local keep="${4:-}"
+
+	local -a held=()
+	local k mask i
+	while IFS= read -r k; do
+		[[ -z "$k" ]] && continue
+		held+=("$k")
+	done < <(printf '%s\n' "$keep" | awk '{ print length($0) "\t" $0 }' | sort -t$'\t' -k1,1nr | cut -f2-)
+
+	# Control characters, which no placeholder holds: \x1f, then one \x1e
+	# per index, then \x1f.
+	for i in "${!held[@]}"; do
+		mask=$'\x1f'$(printf '\x1e%.0s' $(seq 0 "$i"))$'\x1f'
+		text="${text//"${held[$i]}"/"$mask"}"
+	done
+	text="${text//"$from"/"$to"}"
+	for i in "${!held[@]}"; do
+		mask=$'\x1f'$(printf '\x1e%.0s' $(seq 0 "$i"))$'\x1f'
+		text="${text//"$mask"/"${held[$i]}"}"
+	done
+
+	printf '%s' "$text"
+}
+
 # Check whether a relative path matches any ignore pattern.
 #
 # Patterns containing '/' are matched against the full relative path.
@@ -228,15 +270,17 @@ _is_binary_file() {
 # .git/) and applies each replacement whose scope includes "content".
 # Files matching <ignore> patterns are skipped entirely.
 #
-# Usage: _gh_template_substitute_content <root> <pairs_input> [<dry_run>] [<ignore>]
+# Usage: _gh_template_substitute_content <root> <pairs_input> [<dry_run>] [<ignore>] [<keep>]
 #   pairs_input: newline-separated "<from>\t<to>\t<scopes_csv>" rows
 #   dry_run: non-empty string enables dry-run mode (print only)
 #   ignore: newline-separated glob patterns to skip
+#   keep: newline-separated literal strings no substitution may touch
 _gh_template_substitute_content() {
 	local root="$1"
 	local pairs_input="$2"
 	local dry_run="${3:-}"
 	local ignore="${4:-}"
+	local keep="${5:-}"
 
 	local -a froms=() tos=()
 	local from to scopes
@@ -260,6 +304,9 @@ _gh_template_substitute_content() {
 	for i in "${!froms[@]}"; do
 		printf '%s\t%s\n' "${froms[$i]}" "${tos[$i]}"
 	done >"$pairs_file"
+	local keep_file
+	keep_file=$(mktemp)
+	printf '%s\n' "$keep" >"$keep_file"
 
 	local f rel
 	while IFS= read -r -d '' f; do
@@ -271,19 +318,20 @@ _gh_template_substitute_content() {
 			continue
 		fi
 		if [[ -n "$dry_run" ]]; then
-			for i in "${!froms[@]}"; do
-				from="${froms[$i]}"
-				to="${tos[$i]}"
-				if grep -qF -- "$from" "$f" 2>/dev/null; then
-					printf 'content: %s : %s -> %s\n' "$f" "$from" "$to"
-				fi
-			done
+			# The same substitutions, reporting the pairs that would change
+			# the file -- after masking, so a match inside a kept string is
+			# not one.
+			while IFS=$'\t' read -r from to; do
+				printf 'content: %s : %s -> %s\n' "$f" "$from" "$to"
+			done < <(PAIRS_FILE="$pairs_file" KEEP_FILE="$keep_file" REPORT=1 \
+				perl -n "$_GH_TEMPLATE_PERL_SCRIPT" "$f")
 		else
-			PAIRS_FILE="$pairs_file" perl -i -p "$_GH_TEMPLATE_PERL_SCRIPT" "$f"
+			PAIRS_FILE="$pairs_file" KEEP_FILE="$keep_file" \
+				perl -i -p "$_GH_TEMPLATE_PERL_SCRIPT" "$f"
 		fi
 	done < <(find "$root" -type f -not -path "*/.git" -not -path "*/.git/*" -print0)
 
-	rm -f "$pairs_file"
+	rm -f "$pairs_file" "$keep_file"
 }
 
 # Substitute file and directory names in the repo.
@@ -292,12 +340,13 @@ _gh_template_substitute_content() {
 # rename from invalidating child paths. Paths matching <ignore> patterns
 # are skipped.
 #
-# Usage: _gh_template_substitute_paths <root> <pairs_input> [<dry_run>] [<ignore>]
+# Usage: _gh_template_substitute_paths <root> <pairs_input> [<dry_run>] [<ignore>] [<keep>]
 _gh_template_substitute_paths() {
 	local root="$1"
 	local pairs_input="$2"
 	local dry_run="${3:-}"
 	local ignore="${4:-}"
+	local keep="${5:-}"
 
 	local from to scopes
 	while IFS=$'\t' read -r from to scopes; do
@@ -312,7 +361,7 @@ _gh_template_substitute_paths() {
 			fi
 			base=$(basename "$p")
 			dir=$(dirname "$p")
-			new="${base//${from}/${to}}"
+			new=$(_gh_template_replace_keeping "$base" "$from" "$to" "$keep")
 			if [[ "$new" != "$base" ]]; then
 				if [[ -n "$dry_run" ]]; then
 					printf 'path: %s -> %s/%s\n' "$p" "$dir" "$new"
@@ -334,12 +383,13 @@ _gh_template_substitute_paths() {
 # replacement list, then perform content + path substitution. Wrapped in
 # `gum spin` by _gh_template_apply so the user sees progress.
 #
-# Usage: _gh_template_run_substitution <repo_dir> <config_path> <values> <ignore>
+# Usage: _gh_template_run_substitution <repo_dir> <config_path> <values> <ignore> [<keep>]
 _gh_template_run_substitution() {
 	local repo_dir="$1"
 	local config_path="$2"
 	local values="$3"
 	local ignore="$4"
+	local keep="${5:-}"
 
 	local replacements
 	replacements=$(_gh_template_build_replacements "$config_path" "$values")
@@ -347,8 +397,20 @@ _gh_template_run_substitution() {
 		return 0
 	fi
 
-	_gh_template_substitute_content "$repo_dir" "$replacements" "" "$ignore"
-	_gh_template_substitute_paths "$repo_dir" "$replacements" "" "$ignore"
+	_gh_template_substitute_content "$repo_dir" "$replacements" "" "$ignore" "$keep"
+	_gh_template_substitute_paths "$repo_dir" "$replacements" "" "$ignore" "$keep"
+}
+
+# The path of <path> relative to <root>, when it lies inside it; empty
+# otherwise.
+#
+# Usage: _gh_template_relative_to <root> <path>
+_gh_template_relative_to() {
+	local root path
+	root=$(cd -- "$1" && pwd -P) || return 0
+	path=$(cd -- "$(dirname -- "$2")" 2>/dev/null && pwd -P)/$(basename -- "$2") || return 0
+	[[ "$path" == "$root"/* ]] && printf '%s' "${path#"$root"/}"
+	return 0
 }
 
 # Apply template substitutions to a directory.
@@ -372,8 +434,9 @@ _gh_template_apply() {
 	local values
 	values=$(_gh_template_prompt_variables "$config_path") || return 1
 
-	local ignore
+	local ignore keep
 	ignore=$(_gh_template_parse_ignore "$config_path")
+	keep=$(_gh_template_parse_keep "$config_path")
 
 	if [[ -n "$dry_run" ]]; then
 		gum log --level info "Dry run — no changes will be made"
@@ -383,16 +446,31 @@ _gh_template_apply() {
 			gum log --level warn "no replacements computed"
 			return 0
 		fi
-		_gh_template_substitute_content "$repo_dir" "$replacements" "$dry_run" "$ignore"
-		_gh_template_substitute_paths "$repo_dir" "$replacements" "$dry_run" "$ignore"
+		# The config is removed, not substituted: leave it out of the plan.
+		local config_rel
+		config_rel=$(_gh_template_relative_to "$repo_dir" "$config_path")
+		[[ -n "$config_rel" ]] && ignore="${ignore:+$ignore$'\n'}$config_rel"
+		_gh_template_substitute_content "$repo_dir" "$replacements" "$dry_run" "$ignore" "$keep"
+		_gh_template_substitute_paths "$repo_dir" "$replacements" "$dry_run" "$ignore" "$keep"
 		printf 'config: would remove %s\n' "$config_path"
 		return 0
 	fi
 
-	_gh_template_spin "Substituting template variables..." \
-		_gh_template_run_substitution "$repo_dir" "$config_path" "$values" "$ignore"
+	# Out of the tree before substituting: the config names every
+	# placeholder, so the passes would rewrite it -- and rename it, when its
+	# own name holds one, as .github/template.yml does `template` -- and the
+	# removal after would miss it.
+	local held_config
+	held_config=$(mktemp)
+	mv -- "$config_path" "$held_config"
 
-	rm -f "$config_path"
+	if ! _gh_template_spin "Substituting template variables..." \
+		_gh_template_run_substitution "$repo_dir" "$held_config" "$values" "$ignore" "$keep"; then
+		mv -- "$held_config" "$config_path" 2>/dev/null || true
+		return 1
+	fi
+
+	rm -f "$held_config"
 
 	if git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
 		gum log --level info "Done — review with 'git status' / 'git diff' and commit when ready"

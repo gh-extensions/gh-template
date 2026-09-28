@@ -12,11 +12,22 @@
 # Substitutions are applied in the order they appear in PAIRS_FILE, which
 # is sorted by descending length of <from> so longer placeholders match
 # before shorter overlapping ones.
+#
+# KEEP_FILE, when set, names a file of literal strings, one per line, that
+# no substitution may touch: each is masked before the substitutions run
+# and restored after, so `template` is replaced but `sqlc-gen-template`
+# is not. The masks are control characters, which no placeholder holds.
+#
+# With REPORT set, the script is run as `perl -n` instead: it rewrites
+# nothing, and prints each (from, to) pair that would change the file,
+# once, in PAIRS_FILE order -- what --dry-run shows.
 
 use strict;
 use warnings;
 
 our @PAIRS;
+our @KEEP;
+our %MATCHED;
 
 BEGIN {
     my $path = $ENV{PAIRS_FILE}
@@ -29,8 +40,36 @@ BEGIN {
         push @PAIRS, [ $from, $to ];
     }
     close $fh;
+
+    if (my $keep_path = $ENV{KEEP_FILE}) {
+        open my $kh, "<", $keep_path
+            or die "gh_template.pl: open $keep_path: $!\n";
+        while (my $line = <$kh>) {
+            chomp $line;
+            push @KEEP, $line if length $line;
+        }
+        close $kh;
+        # Longest first, so a kept string is never split by a shorter one.
+        @KEEP = sort { length($b) <=> length($a) } @KEEP;
+    }
 }
 
-for my $p (@PAIRS) {
-    s/\Q$p->[0]\E/$p->[1]/g;
+my @held;
+for my $k (@KEEP) {
+    s/\Q$k\E/push @held, $k; "\x00" . ("\x01" x scalar @held) . "\x00"/ge;
+}
+
+for my $i (0 .. $#PAIRS) {
+    my $p = $PAIRS[$i];
+    $MATCHED{$i} = 1 if s/\Q$p->[0]\E/$p->[1]/g;
+}
+
+s/\x00(\x01+)\x00/$held[length($1) - 1]/g;
+
+END {
+    if ($ENV{REPORT}) {
+        for my $i (sort { $a <=> $b } keys %MATCHED) {
+            print "$PAIRS[$i][0]\t$PAIRS[$i][1]\n";
+        }
+    }
 }

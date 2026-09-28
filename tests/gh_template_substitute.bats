@@ -21,7 +21,7 @@ setup() {
 		source "$REPO_ROOT/scripts/gh_template.sh"
 		declare -f _gh_template_case_variants _gh_template_path_ignored \
 			_gh_template_substitute_content _gh_template_substitute_paths \
-			_is_binary_file
+			_gh_template_replace_keeping _is_binary_file
 	)"
 }
 
@@ -167,6 +167,66 @@ template\tbilling\tcontent'
 	[[ "$output" == "billing-api billing" ]]
 }
 
+@test "_gh_template_substitute_content: leaves kept strings untouched" {
+	local root="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$root"
+	echo "sqlc-gen-template template_dir template" >"$root/code.txt"
+	local pairs=$'template\tbilling\tcontent'
+	local keep=$'sqlc-gen-template\ntemplate_dir'
+
+	_gh_template_substitute_content "$root" "$pairs" "" "" "$keep"
+
+	run cat "$root/code.txt"
+	[[ "$output" == "sqlc-gen-template template_dir billing" ]]
+}
+
+@test "_gh_template_substitute_content: a kept string holding a longer placeholder stays whole" {
+	local root="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$root"
+	echo "grpc-go-template template-api" >"$root/code.txt"
+	local pairs=$'template-api\tbilling-api\tcontent
+template\tbilling\tcontent'
+
+	_gh_template_substitute_content "$root" "$pairs" "" "" "grpc-go-template"
+
+	run cat "$root/code.txt"
+	[[ "$output" == "grpc-go-template billing-api" ]]
+}
+
+@test "_gh_template_substitute_content: dry-run does not report a match only inside a kept string" {
+	local root="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$root"
+	echo "sqlc-gen-template" >"$root/kept.txt"
+	echo "template" >"$root/replaced.txt"
+	local pairs=$'template\tbilling\tcontent'
+
+	run _gh_template_substitute_content "$root" "$pairs" "1" "" "sqlc-gen-template"
+	[[ "$output" != *"kept.txt"* ]]
+	[[ "$output" == *"replaced.txt : template -> billing"* ]]
+
+	run cat "$root/kept.txt"
+	[[ "$output" == "sqlc-gen-template" ]]
+}
+
+# ---------------------------------------------------------------------------
+# _gh_template_replace_keeping
+# ---------------------------------------------------------------------------
+
+@test "_gh_template_replace_keeping: replaces outside kept strings only" {
+	run _gh_template_replace_keeping "template-sqlc-gen-template" "template" "billing" "sqlc-gen-template"
+	[[ "$output" == "billing-sqlc-gen-template" ]]
+}
+
+@test "_gh_template_replace_keeping: masks the longer of two overlapping kept strings first" {
+	run _gh_template_replace_keeping "gen-template-x gen-template template" "template" "billing" $'gen-template\ngen-template-x'
+	[[ "$output" == "gen-template-x gen-template billing" ]]
+}
+
+@test "_gh_template_replace_keeping: treats glob characters literally" {
+	run _gh_template_replace_keeping "a*b ab" "a*b" "x" ""
+	[[ "$output" == "x ab" ]]
+}
+
 # ---------------------------------------------------------------------------
 # _gh_template_substitute_paths
 # ---------------------------------------------------------------------------
@@ -240,4 +300,17 @@ template_api\tbilling_api\tpath'
 	[[ "$output" == *"template-api.txt"* ]]
 	[[ "$output" == *"billing-api.txt"* ]]
 	[[ -f "$root/template-api.txt" ]]
+}
+
+@test "_gh_template_substitute_paths: leaves kept strings in names untouched" {
+	local root="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$root"
+	touch "$root/sqlc-gen-template.yaml" "$root/template.yaml"
+	local pairs=$'template\tbilling\tpath'
+
+	_gh_template_substitute_paths "$root" "$pairs" "" "" "sqlc-gen-template"
+
+	[[ -f "$root/sqlc-gen-template.yaml" ]]
+	[[ -f "$root/billing.yaml" ]]
+	[[ ! -f "$root/template.yaml" ]]
 }

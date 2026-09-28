@@ -45,7 +45,8 @@ setup() {
 		# shellcheck source=../scripts/gh_template.sh
 		source "$REPO_ROOT/scripts/gh_template.sh"
 		declare -f _gh_template_parse_config _gh_template_parse_ignore \
-			_gh_template_path_ignored \
+			_gh_template_parse_keep _gh_template_replace_keeping \
+			_gh_template_relative_to _gh_template_path_ignored \
 			_gh_template_case_variants _gh_template_prompt_variables \
 			_gh_template_build_replacements _gh_template_substitute_content \
 			_gh_template_substitute_paths _gh_template_apply \
@@ -263,6 +264,10 @@ EOF
 	_gh_template_apply "$repo"
 
 	[[ ! -f "$repo/.github/template.yml" ]]
+	# Not renamed along the way either: the config's own name holds the
+	# `template` placeholder.
+	[[ ! -e "$repo/.github/billing.yml" ]]
+	[[ -z "$(ls -A "$repo/.github")" ]]
 	[[ ! -d "$repo/src/template-api" ]]
 	[[ -d "$repo/src/billing-api" ]]
 	[[ -f "$repo/src/billing-api/billing_api.go" ]]
@@ -310,6 +315,89 @@ EOF
 	[[ "$output" == "billing-api" ]]
 	run cat "$repo/keep.tmpl"
 	[[ "$output" == "template-api" ]]
+}
+
+@test "_gh_template_apply: honors the keep list" {
+	local repo="$BATS_TEST_TMPDIR/repo"
+	_init_repo "$repo"
+	mkdir -p "$repo/.github"
+	cat >"$repo/.github/template.yml" <<'EOF'
+variables:
+  - text: "Service?"
+    name: template
+    case: [kebab]
+    scope: [path, content]
+keep:
+  - sqlc-gen-template
+EOF
+	echo "plugin: sqlc-gen-template, service: template" >"$repo/sqlc.yaml"
+	touch "$repo/sqlc-gen-template.lock"
+	git -C "$repo" add -A
+	git -C "$repo" commit -q -m "initial"
+
+	declare -gA _gh_template_var_overrides=(
+		[template]="billing"
+	)
+
+	_gh_template_apply "$repo"
+
+	run cat "$repo/sqlc.yaml"
+	[[ "$output" == "plugin: sqlc-gen-template, service: billing" ]]
+	[[ -f "$repo/sqlc-gen-template.lock" ]]
+}
+
+@test "_gh_template_apply: the config is not rewritten or renamed, and is removed" {
+	local repo="$BATS_TEST_TMPDIR/repo"
+	_init_repo "$repo"
+	mkdir -p "$repo/.github"
+	cat >"$repo/.github/template.yml" <<'EOF'
+variables:
+  - text: "Service?"
+    name: template
+    case: [kebab]
+    scope: [path, content]
+EOF
+	echo "template" >"$repo/code.txt"
+	git -C "$repo" add -A
+	git -C "$repo" commit -q -m "initial"
+
+	declare -gA _gh_template_var_overrides=(
+		[template]="billing"
+	)
+
+	_gh_template_apply "$repo"
+
+	[[ ! -e "$repo/.github/template.yml" ]]
+	[[ ! -e "$repo/.github/billing.yml" ]]
+	run cat "$repo/code.txt"
+	[[ "$output" == "billing" ]]
+}
+
+@test "_gh_template_apply: dry-run leaves the config out of the plan" {
+	local repo="$BATS_TEST_TMPDIR/repo"
+	_init_repo "$repo"
+	mkdir -p "$repo/.github"
+	cat >"$repo/.github/template.yml" <<'EOF'
+variables:
+  - text: "Service?"
+    name: template
+    case: [kebab]
+    scope: [path, content]
+EOF
+	echo "template" >"$repo/code.txt"
+	git -C "$repo" add -A
+	git -C "$repo" commit -q -m "initial"
+
+	declare -gA _gh_template_var_overrides=(
+		[template]="billing"
+	)
+
+	run _gh_template_apply "$repo" "$repo/.github/template.yml" "1"
+	[[ "$output" == *"code.txt : template -> billing"* ]]
+	[[ "$output" != *"content: $repo/.github/template.yml"* ]]
+	[[ "$output" != *"path: $repo/.github/template.yml"* ]]
+	[[ "$output" == *"config: would remove"* ]]
+	[[ -f "$repo/.github/template.yml" ]]
 }
 
 @test "_gh_template_apply: no-op when config missing" {
@@ -402,6 +490,23 @@ EOF
 	[[ "$status" -eq 0 ]]
 	[[ "$output" == *"*.tmpl"* ]]
 	[[ "$output" == *"vendor/*"* ]]
+}
+
+@test "_gh_template_parse_keep: emits each string on its own line" {
+	local cfg="$BATS_TEST_TMPDIR/template.yml"
+	printf 'variables: []\nkeep:\n  - sqlc-gen-template\n  - template_dir\n' >"$cfg"
+	run _gh_template_parse_keep "$cfg"
+	[[ "$status" -eq 0 ]]
+	[[ "${lines[0]}" == "sqlc-gen-template" ]]
+	[[ "${lines[1]}" == "template_dir" ]]
+}
+
+@test "_gh_template_parse_keep: empty when no keep key" {
+	local cfg="$BATS_TEST_TMPDIR/template.yml"
+	echo "variables: []" >"$cfg"
+	run _gh_template_parse_keep "$cfg"
+	[[ "$status" -eq 0 ]]
+	[[ -z "$output" ]]
 }
 
 @test "_gh_template_parse_ignore: empty when no ignore key" {
