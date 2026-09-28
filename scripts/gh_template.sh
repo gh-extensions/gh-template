@@ -374,6 +374,11 @@ _gh_template_apply() {
 
 	local ignore
 	ignore=$(_gh_template_parse_ignore "$config_path")
+	# The config itself is never substituted: it names every placeholder, and
+	# its own name can hold one -- .github/template.yml holds `template` --
+	# which would rename it out from under the removal below.
+	local config_rel="${config_path#"$repo_dir"/}"
+	[[ "$config_rel" != "$config_path" ]] && ignore="${ignore:+$ignore$'\n'}$config_rel"
 
 	if [[ -n "$dry_run" ]]; then
 		gum log --level info "Dry run — no changes will be made"

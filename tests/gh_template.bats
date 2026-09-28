@@ -263,6 +263,9 @@ EOF
 	_gh_template_apply "$repo"
 
 	[[ ! -f "$repo/.github/template.yml" ]]
+	# Not renamed along the way either: the config's own name holds the
+	# `template` placeholder.
+	[[ -z "$(ls -A "$repo/.github")" ]]
 	[[ ! -d "$repo/src/template-api" ]]
 	[[ -d "$repo/src/billing-api" ]]
 	[[ -f "$repo/src/billing-api/billing_api.go" ]]
@@ -310,6 +313,32 @@ EOF
 	[[ "$output" == "billing-api" ]]
 	run cat "$repo/keep.tmpl"
 	[[ "$output" == "template-api" ]]
+}
+
+@test "_gh_template_apply: never substitutes the config itself" {
+	local repo="$BATS_TEST_TMPDIR/repo"
+	_init_repo "$repo"
+	mkdir -p "$repo/.github"
+	printf 'variables:\n  - text: "Service?"\n    name: template\n    case: [kebab]\n    scope: [path, content]\n' \
+		>"$repo/.github/template.yml"
+	echo "template" >"$repo/code.txt"
+	git -C "$repo" add -A
+	git -C "$repo" commit -q -m "initial"
+
+	declare -gA _gh_template_var_overrides=(
+		[template]="billing"
+	)
+
+	run _gh_template_apply "$repo" "$repo/.github/template.yml" "1"
+	[[ "$output" == *"code.txt : template -> billing"* ]]
+	[[ "$output" != *": $repo/.github/template.yml"* ]]
+
+	_gh_template_apply "$repo"
+
+	[[ ! -e "$repo/.github/template.yml" ]]
+	[[ ! -e "$repo/.github/billing.yml" ]]
+	run cat "$repo/code.txt"
+	[[ "$output" == "billing" ]]
 }
 
 @test "_gh_template_apply: no-op when config missing" {
