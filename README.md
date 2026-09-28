@@ -237,7 +237,9 @@ slash values out of any single-token identifier context.
    directories are created first so a single component can expand into a nested
    tree.
 8. `.github/template.yml` is removed and the working tree is left dirty for
-   the user to review with `git diff` and commit however they prefer.
+   the user to review with `git diff` and commit however they prefer. The
+   config itself is never substituted, even when its name holds a
+   placeholder, as `template.yml` holds `template`.
 
 ## Limitations
 
