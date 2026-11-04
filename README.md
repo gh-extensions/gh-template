@@ -42,6 +42,18 @@ gh extension install gh-extensions/gh-template --pin v0.1.0  # recommended: pin 
 gh extension install gh-extensions/gh-template                # installs from main (unstable)
 ```
 
+**Nix:** the flake has the extension as a package, with its tools (`bash`, `gh`, `gum`, `yq-go`, `perl`, `file`, `git`, `ccase`) in its `PATH`. With
+home-manager, add it to `programs.gh.extensions`:
+
+```nix
+{
+  inputs.gh-template.url = "github:gh-extensions/gh-template";
+
+  # in a home-manager module
+  programs.gh.extensions = [ inputs.gh-template.packages.${system}.default ];
+}
+```
+
 ## Usage
 
 ```bash

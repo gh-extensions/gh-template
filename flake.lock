@@ -1,21 +1,5 @@
 {
   "nodes": {
-    "ccase-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1773449173,
-        "narHash": "sha256-5STKMFvCfB4yOV9jCJGDux4AfwbdWOBi8f7UV6s8TqA=",
-        "owner": "stringcase",
-        "repo": "ccase",
-        "rev": "4542911256deee7a5bca7e20778f5ef81c20c121",
-        "type": "github"
-      },
-      "original": {
-        "owner": "stringcase",
-        "repo": "ccase",
-        "type": "github"
-      }
-    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -52,7 +36,6 @@
     },
     "root": {
       "inputs": {
-        "ccase-src": "ccase-src",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs"
       }
