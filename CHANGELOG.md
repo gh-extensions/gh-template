@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/gh-extensions/gh-template/compare/v0.3.0...v0.4.0) (2026-11-04)
+
+
+### Features
+
+* **flake:** add the extension as a nix package ([#30](https://github.com/gh-extensions/gh-template/issues/30)) ([7c286a2](https://github.com/gh-extensions/gh-template/commit/7c286a2c8a7c723b174a09515c6b493a1fe99d61))
+
 ## [0.3.0](https://github.com/gh-extensions/gh-template/compare/v0.2.1...v0.3.0) (2026-09-28)
 
 
